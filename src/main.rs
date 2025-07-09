@@ -72,15 +72,15 @@ impl Iterator for Lexer {
                     self.state = transition.state;
                     self.cursor.advace();
                 }
-                TransitionType::EmitToken { token, end } => {
+                TransitionType::EmitToken(token) => {
                     self.state = transition.state;
                     self.cursor.align();
-                    self.end = end;
                     return Some(token);
                 }
-                TransitionType::End => {
+                TransitionType::End(token) => {
                     self.state = transition.state;
-                    return None;
+                    self.end = true;
+                    return token;
                 }
             }
         }
@@ -113,9 +113,9 @@ struct Transition {
     transition_type: TransitionType,
 }
 enum TransitionType {
-    EmitToken { token: Token, end: bool },
+    EmitToken(Token),
     Advance,
-    End,
+    End(Option<Token>),
 }
 
 // TODO: Define how to end the token
@@ -124,13 +124,10 @@ impl State for CommentState {
         match cursor.peek() {
             None => Transition {
                 state: Box::new(CommentState),
-                transition_type: TransitionType::EmitToken {
-                    token: Token {
-                        lexeme: cursor.lexeme(),
-                        kind: TokenKind::Comment,
-                    },
-                    end: true,
-                },
+                transition_type: TransitionType::End(Some(Token {
+                    lexeme: cursor.lexeme(),
+                    kind: TokenKind::Comment,
+                })),
             },
             Some(c) => match c {
                 char if char.is_alphanumeric()
@@ -144,13 +141,10 @@ impl State for CommentState {
                 }
                 '\n' => Transition {
                     state: Box::new(StartState),
-                    transition_type: TransitionType::EmitToken {
-                        token: Token {
-                            lexeme: cursor.lexeme(),
-                            kind: TokenKind::Comment,
-                        },
-                        end: false,
-                    },
+                    transition_type: TransitionType::EmitToken(Token {
+                        lexeme: cursor.lexeme(),
+                        kind: TokenKind::Comment,
+                    }),
                 },
                 _ => todo!(), // # Error
             },
@@ -163,7 +157,7 @@ impl State for StartState {
         match cursor.peek() {
             None => Transition {
                 state: Box::new(StartState),
-                transition_type: TransitionType::End,
+                transition_type: TransitionType::End(None),
             },
             Some(c) => match c {
                 '#' => Transition {
