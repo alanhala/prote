@@ -1,10 +1,14 @@
-use std::fs;
+use std::{error::Error, fmt::Display, fs};
 
 fn main() {
     let cif_file = fs::read_to_string("4d1m.cif").expect("Could not open the file");
     let mut lexer = Lexer::new(cif_file);
-    let asd = lexer.next();
-    println!("{:?}", asd);
+    for next in lexer.next() {
+        match next {
+            Ok(token) => println!("Token {:?}", token),
+            Err(error) => println!("Lexer error at {}", error.position),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -58,7 +62,7 @@ struct Lexer {
 }
 
 impl Iterator for Lexer {
-    type Item = Token;
+    type Item = Result<Token, LexerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.end {
@@ -75,12 +79,22 @@ impl Iterator for Lexer {
                 TransitionType::EmitToken(token) => {
                     self.state = transition.state;
                     self.cursor.align();
-                    return Some(token);
+                    return Some(Ok(token));
                 }
                 TransitionType::End(token) => {
                     self.state = transition.state;
                     self.end = true;
-                    return token;
+
+                    return match token {
+                        None => None,
+                        Some(token) => Some(Ok(token)),
+                    };
+                }
+                TransitionType::Error(error) => {
+                    self.state = transition.state;
+                    self.end = true;
+
+                    return Some(Err(error));
                 }
             }
         }
@@ -103,10 +117,7 @@ trait State {
 
 struct StartState;
 struct CommentState;
-struct ErrorState {
-    error: String,
-}
-struct EndState;
+struct ErrorState;
 
 struct Transition {
     state: Box<dyn State>,
@@ -116,9 +127,23 @@ enum TransitionType {
     EmitToken(Token),
     Advance,
     End(Option<Token>),
+    Error(LexerError),
 }
 
-// TODO: Define how to end the token
+#[derive(Debug)]
+struct LexerError {
+    position: usize,
+}
+
+impl State for ErrorState {
+    fn consume(&self, cursor: &Cursor) -> Transition {
+        Transition {
+            state: Box::new(ErrorState),
+            transition_type: TransitionType::End(None),
+        }
+    }
+}
+
 impl State for CommentState {
     fn consume(&self, cursor: &Cursor) -> Transition {
         match cursor.peek() {
@@ -146,7 +171,12 @@ impl State for CommentState {
                         kind: TokenKind::Comment,
                     }),
                 },
-                _ => todo!(), // # Error
+                _ => Transition {
+                    state: Box::new(ErrorState),
+                    transition_type: TransitionType::Error(LexerError {
+                        position: cursor.position,
+                    }),
+                },
             },
         }
     }
@@ -169,12 +199,3 @@ impl State for StartState {
         }
     }
 }
-
-// impl State for EndState {
-//     fn consume(&self, char: char) -> Transition {
-//         Transition {
-//             state: Box::new(EndState),
-//             transition_type: TransitionType::End,
-//         }
-//     }
-// }
