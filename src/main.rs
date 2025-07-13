@@ -3,8 +3,11 @@ use std::fs;
 fn main() {
     let cif_file = fs::read_to_string("4d1m.cif").unwrap();
     let mut lexer = Lexer::new(cif_file);
-    while let Some(Ok(token)) = lexer.next() {
-        println!("Token {:?}", token);
+    for result in lexer {
+        match result {
+            Ok(token) => println!("Token {:?}", token),
+            Err(lexer_error) => println!("Lexer Error"),
+        }
     }
 }
 
@@ -18,6 +21,7 @@ struct Token {
 enum TokenKind {
     Comment,
     Integer,
+    Float,
 }
 
 #[derive(Debug)]
@@ -72,6 +76,8 @@ enum State {
     Start,
     Comment,
     Integer,
+    DecimalPoint,
+    Float,
 }
 
 impl State {
@@ -123,6 +129,31 @@ impl State {
                         token: Token {
                             lexeme: String::from_iter(input.buffer.clone()),
                             kind: TokenKind::Integer,
+                        },
+                        consume: false,
+                    },
+                )),
+                '.' => Ok((State::DecimalPoint, LexerAction::Advance { consume: true })),
+                _ => Err(LexerError),
+            },
+
+            State::DecimalPoint => match input.char {
+                char if char.is_ascii_digit() => {
+                    Ok((State::Float, LexerAction::Advance { consume: true }))
+                }
+                _ => Err(LexerError),
+            },
+
+            State::Float => match input.char {
+                char if char.is_ascii_digit() => {
+                    Ok((State::Float, LexerAction::Advance { consume: true }))
+                }
+                char if char.is_ascii_whitespace() => Ok((
+                    State::Start,
+                    LexerAction::Emit {
+                        token: Token {
+                            lexeme: String::from_iter(input.buffer.clone()),
+                            kind: TokenKind::Float,
                         },
                         consume: false,
                     },
