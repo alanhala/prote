@@ -43,7 +43,7 @@ impl Cursor {
     fn new(input: String) -> Cursor {
         Cursor {
             input,
-            line: 0,
+            line: 1,
             position: 0,
             offset: 0,
             buffer: vec![],
@@ -82,7 +82,7 @@ enum State {
 
 impl State {
     fn transition(self, input: &StateInput) -> Result<(State, LexerAction), LexerError> {
-        // println!("Processing {:?}", input);
+        // println!("Processing {:?} {:?}", self, input);
         match self {
             State::StartLine => match input.char {
                 ';' => todo!(),
@@ -107,7 +107,7 @@ impl State {
                     Ok((State::Comment, LexerAction::Advance { consume: true }))
                 }
                 '\n' => Ok((
-                    State::StartLine,
+                    State::Start,
                     LexerAction::Emit {
                         token: Token {
                             lexeme: String::from_iter(input.buffer.clone()),
@@ -163,12 +163,13 @@ impl State {
         }
     }
 
-    fn finish(self, acc: String) -> Result<Token, LexerError> {
+    fn finish(self, acc: String) -> Result<Option<Token>, LexerError> {
         match self {
-            State::Comment => Ok(Token {
+            State::Comment => Ok(Some(Token {
                 lexeme: acc,
                 kind: TokenKind::Comment,
-            }),
+            })),
+            State::StartLine => Ok(None),
             _ => Err(LexerError),
         }
     }
@@ -192,7 +193,7 @@ impl Lexer {
     fn new(input: String) -> Lexer {
         Lexer {
             cursor: Cursor::new(input),
-            state: State::StartLine,
+            state: State::Start,
             end: false,
         }
     }
@@ -218,10 +219,17 @@ impl Iterator for Lexer {
             match self.cursor.peek() {
                 None => {
                     self.end = true;
-                    return Some(
-                        self.state
-                            .finish(String::from_iter(self.cursor.buffer.clone())),
-                    );
+
+                    return match self
+                        .state
+                        .finish(String::from_iter(self.cursor.buffer.clone()))
+                    {
+                        Ok(token) => match token {
+                            None => None,
+                            Some(token) => Some(Ok(token)),
+                        },
+                        Err(lexer_error) => Some(Err(lexer_error)),
+                    };
                 }
                 Some(ch) => {
                     let input = StateInput {
