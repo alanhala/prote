@@ -1,13 +1,10 @@
-use std::{error::Error, fmt::Display, fs};
+use std::fs;
 
 fn main() {
-    let cif_file = fs::read_to_string("4d1m.cif").expect("Could not open the file");
+    let cif_file = fs::read_to_string("4d1m.cif").unwrap();
     let mut lexer = Lexer::new(cif_file);
-    for next in lexer.next() {
-        match next {
-            Ok(token) => println!("Token {:?}", token),
-            Err(error) => println!("Lexer error at {}", error.position),
-        }
+    while let Some(Ok(token)) = lexer.next() {
+        println!("Token {:?}", token);
     }
 }
 
@@ -20,45 +17,154 @@ struct Token {
 #[derive(Debug)]
 enum TokenKind {
     Comment,
+    Integer,
 }
 
+#[derive(Debug)]
 struct Cursor {
     input: String,
+    line: usize,
     position: usize,
     offset: usize,
+    buffer: Vec<char>,
+}
+
+#[derive(Debug)]
+struct StateInput {
+    char: char,
+    buffer: Vec<char>,
 }
 
 impl Cursor {
     fn new(input: String) -> Cursor {
         Cursor {
-            input: input,
+            input,
+            line: 0,
             position: 0,
             offset: 0,
+            buffer: vec![],
         }
     }
 
     fn peek(&self) -> Option<char> {
-        self.input.chars().nth(self.offset)
+        self.input.chars().nth(self.position + self.offset)
     }
 
-    fn lexeme(&self) -> String {
-        self.input[self.position..self.offset].to_string()
+    fn advance(&mut self) {
+        self.buffer.push(self.peek().unwrap());
+        self.offset += 1;
     }
 
-    fn align(&mut self) {
-        self.position = self.offset;
+    fn new_line(&mut self) {
+        self.line += 1;
+    }
+
+    fn start(&mut self) {
+        self.position += self.offset;
         self.offset = 0;
+        self.buffer = vec![];
+    }
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+enum State {
+    StartLine,
+    Start,
+    Comment,
+    Integer,
+}
+
+impl State {
+    fn transition(self, input: &StateInput) -> Result<(State, LexerAction), LexerError> {
+        // println!("Processing {:?}", input);
+        match self {
+            State::StartLine => match input.char {
+                ';' => todo!(),
+                _ => Ok((State::Start, LexerAction::Advance { consume: false })),
+            },
+
+            State::Start => match input.char {
+                '#' => Ok((State::Comment, LexerAction::Advance { consume: true })),
+                '\n' => Ok((State::StartLine, LexerAction::Advance { consume: true })),
+                ' ' => Ok((State::Start, LexerAction::Advance { consume: true })),
+                char if char.is_ascii_digit() => {
+                    Ok((State::Integer, LexerAction::Advance { consume: true }))
+                }
+                _ => Err(LexerError),
+            },
+
+            State::Comment => match input.char {
+                c if c.is_alphanumeric()
+                    || c.is_ascii_punctuation()
+                    || (c.is_whitespace() && c != '\n') =>
+                {
+                    Ok((State::Comment, LexerAction::Advance { consume: true }))
+                }
+                '\n' => Ok((
+                    State::StartLine,
+                    LexerAction::Emit {
+                        token: Token {
+                            lexeme: String::from_iter(input.buffer.clone()),
+                            kind: TokenKind::Comment,
+                        },
+                        consume: false,
+                    },
+                )),
+                _ => Err(LexerError),
+            },
+
+            State::Integer => match input.char {
+                char if char.is_ascii_digit() => {
+                    Ok((State::Integer, LexerAction::Advance { consume: true }))
+                }
+                char if char.is_ascii_whitespace() => Ok((
+                    State::Start,
+                    LexerAction::Emit {
+                        token: Token {
+                            lexeme: String::from_iter(input.buffer.clone()),
+                            kind: TokenKind::Integer,
+                        },
+                        consume: false,
+                    },
+                )),
+                _ => Err(LexerError),
+            },
+        }
     }
 
-    fn advace(&mut self) {
-        self.offset += 1
+    fn finish(self, acc: String) -> Result<Token, LexerError> {
+        match self {
+            State::Comment => Ok(Token {
+                lexeme: acc,
+                kind: TokenKind::Comment,
+            }),
+            _ => Err(LexerError),
+        }
     }
+}
+
+#[derive(Debug)]
+struct LexerError;
+
+enum LexerAction {
+    Emit { token: Token, consume: bool },
+    Advance { consume: bool },
 }
 
 struct Lexer {
     cursor: Cursor,
-    state: Box<dyn State>,
+    state: State,
     end: bool,
+}
+
+impl Lexer {
+    fn new(input: String) -> Lexer {
+        Lexer {
+            cursor: Cursor::new(input),
+            state: State::StartLine,
+            end: false,
+        }
+    }
 }
 
 impl Iterator for Lexer {
@@ -70,132 +176,53 @@ impl Iterator for Lexer {
         }
 
         loop {
-            let transition = self.state.consume(&self.cursor);
-            match transition.transition_type {
-                TransitionType::Advance => {
-                    self.state = transition.state;
-                    self.cursor.advace();
-                }
-                TransitionType::EmitToken(token) => {
-                    self.state = transition.state;
-                    self.cursor.align();
-                    return Some(Ok(token));
-                }
-                TransitionType::End(token) => {
-                    self.state = transition.state;
-                    self.end = true;
-
-                    return match token {
-                        None => None,
-                        Some(token) => Some(Ok(token)),
-                    };
-                }
-                TransitionType::Error(error) => {
-                    self.state = transition.state;
-                    self.end = true;
-
-                    return Some(Err(error));
-                }
+            // println!("Cursor: {:?}", self.cursor);
+            // println!("State: {:?}", self.state);
+            if self.state == State::StartLine {
+                self.cursor.new_line();
             }
-        }
-    }
-}
+            if self.state == State::Start {
+                self.cursor.start();
+            }
+            match self.cursor.peek() {
+                None => {
+                    self.end = true;
+                    return Some(
+                        self.state
+                            .finish(String::from_iter(self.cursor.buffer.clone())),
+                    );
+                }
+                Some(ch) => {
+                    let input = StateInput {
+                        char: ch,
+                        buffer: self.cursor.buffer.clone(), // TODO: Try to not use clone,
+                    };
+                    match self.state.transition(&input) {
+                        Ok((new_state, action)) => {
+                            self.state = new_state;
+                            match action {
+                                LexerAction::Emit { token, consume } => {
+                                    if consume {
+                                        self.cursor.advance();
+                                    }
+                                    self.cursor.start();
 
-impl Lexer {
-    fn new(input: String) -> Lexer {
-        Lexer {
-            cursor: Cursor::new(input),
-            state: Box::new(StartState),
-            end: false,
-        }
-    }
-}
-
-trait State {
-    fn consume(&self, cursor: &Cursor) -> Transition;
-}
-
-struct StartState;
-struct CommentState;
-struct ErrorState;
-
-struct Transition {
-    state: Box<dyn State>,
-    transition_type: TransitionType,
-}
-enum TransitionType {
-    EmitToken(Token),
-    Advance,
-    End(Option<Token>),
-    Error(LexerError),
-}
-
-#[derive(Debug)]
-struct LexerError {
-    position: usize,
-}
-
-impl State for ErrorState {
-    fn consume(&self, cursor: &Cursor) -> Transition {
-        Transition {
-            state: Box::new(ErrorState),
-            transition_type: TransitionType::End(None),
-        }
-    }
-}
-
-impl State for CommentState {
-    fn consume(&self, cursor: &Cursor) -> Transition {
-        match cursor.peek() {
-            None => Transition {
-                state: Box::new(CommentState),
-                transition_type: TransitionType::End(Some(Token {
-                    lexeme: cursor.lexeme(),
-                    kind: TokenKind::Comment,
-                })),
-            },
-            Some(c) => match c {
-                char if char.is_alphanumeric()
-                    || char.is_ascii_punctuation()
-                    || char.is_whitespace() =>
-                {
-                    Transition {
-                        state: Box::new(CommentState),
-                        transition_type: TransitionType::Advance,
+                                    return Some(Ok(token));
+                                }
+                                LexerAction::Advance { consume } => {
+                                    if consume {
+                                        self.cursor.advance();
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.end = true;
+                            return Some(Err(e));
+                        }
                     }
                 }
-                '\n' => Transition {
-                    state: Box::new(StartState),
-                    transition_type: TransitionType::EmitToken(Token {
-                        lexeme: cursor.lexeme(),
-                        kind: TokenKind::Comment,
-                    }),
-                },
-                _ => Transition {
-                    state: Box::new(ErrorState),
-                    transition_type: TransitionType::Error(LexerError {
-                        position: cursor.position,
-                    }),
-                },
-            },
-        }
-    }
-}
-
-impl State for StartState {
-    fn consume(&self, cursor: &Cursor) -> Transition {
-        match cursor.peek() {
-            None => Transition {
-                state: Box::new(StartState),
-                transition_type: TransitionType::End(None),
-            },
-            Some(c) => match c {
-                '#' => Transition {
-                    state: Box::new(CommentState),
-                    transition_type: TransitionType::Advance,
-                },
-                _ => todo!(),
-            },
+            }
         }
     }
 }
