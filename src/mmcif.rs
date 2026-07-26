@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
 
 use crate::atom::{Atom, Element};
 use crate::bond::Bond;
 use crate::conformer::Conformer;
-use crate::molecule::Molecule;
+use crate::ensemble::Ensemble;
 use crate::position::Position;
 use crate::residue::Residue;
 use crate::topology::Topology;
@@ -109,9 +109,13 @@ pub struct AtomSite {
     pub label_entity_id: u8,
     pub label_asym_id: String,
     pub label_atom_id: String,
+    pub label_alt_id: Option<String>,
     // We use auth_seq_id because for non-polymers the label is `.`, which will end up merging all the atoms into one
     // residue
     pub auth_seq_id: i64,
+    // Disambiguates residues that share an auth_seq_id (e.g. an inserted residue kept under a reference numbering scheme).
+    // For example: 3PTB chain A residue 184 (TYR) vs 184A (GLY).
+    pub pdbx_ins_code: Option<String>,
     pub label_comp_id: String,
     pub type_symbol: Element,
     pub is_hetero: bool,
@@ -178,7 +182,10 @@ impl MmCIF {
                 let label_entity_id = field(&row, "_atom_site.label_entity_id", Value::as_int)? as u8;
                 let label_asym_id = field(&row, "_atom_site.label_asym_id", Value::as_str)?.to_string();
                 let label_atom_id = field(&row, "_atom_site.label_atom_id", Value::as_str)?.to_string();
+                let label_alt_id = optional_field(&row, "_atom_site.label_alt_id", Value::as_str)?.map(str::to_string);
                 let auth_seq_id = field(&row, "_atom_site.auth_seq_id", Value::as_int)?;
+                let pdbx_ins_code =
+                    optional_field(&row, "_atom_site.pdbx_PDB_ins_code", Value::as_str)?.map(str::to_string);
                 let label_comp_id = field(&row, "_atom_site.label_comp_id", Value::as_str)?.to_string();
                 let type_symbol = field(&row, "_atom_site.type_symbol", element)?;
                 let is_hetero_atom = field(&row, "_atom_site.group_PDB", is_hetero)?;
@@ -192,7 +199,9 @@ impl MmCIF {
                     label_entity_id,
                     label_asym_id,
                     label_atom_id,
+                    label_alt_id,
                     auth_seq_id,
+                    pdbx_ins_code,
                     label_comp_id,
                     type_symbol,
                     is_hetero: is_hetero_atom,
@@ -261,42 +270,84 @@ impl MmCIF {
     // a struct_asym with no matching entity_id or no atom_site rows is a
     // malformed-file problem, not an invariant of this program, same as the
     // field-level errors in `new`.
-    pub fn build_molecules(&self) -> Vec<Molecule> {
-        let mut molecules: Vec<Molecule> = vec![];
+    pub fn build_ensembles(&self) -> Vec<Ensemble> {
+        let mut ensembles: Vec<Ensemble> = vec![];
         for struct_asym in self.struct_asym() {
             let entity = self.entity(struct_asym.entity_id).unwrap();
+            let mut conformers: HashMap<Option<String>, (Vec<Position>, Vec<f32>, Vec<f32>)> = HashMap::new();
+            conformers.insert(None, (vec![], vec![], vec![]));
             let mut residues: Vec<Residue> = vec![];
             let mut atoms: Vec<Atom> = vec![];
-            let mut positions: Vec<Position> = vec![];
-            let mut occupancies: Vec<f32> = vec![];
-            let mut b_factors: Vec<f32> = vec![];
             let atom_sites = self.atom_sites(&struct_asym.id).unwrap();
             let mut residue_start = 0;
+            // (auth_seq_id, pdbx_ins_code, label_atom_id) is the real atom identity. auth_seq_id
+            // alone collides for inserted residues (e.g. 3PTB chain A: TYR 184 and GLY 184A both
+            // have an atom named "N"), and label_alt_id must be ignored here since alt records
+            // are the *same* atom, not different ones.
+            let mut seen_atoms: HashSet<(i64, Option<String>, String)> = HashSet::new();
             for (i, atom_site) in atom_sites.iter().enumerate() {
-                atoms.push(Atom::new(atom_site.type_symbol, atom_site.label_atom_id.clone()));
-                positions.push(Position::new(atom_site.x, atom_site.y, atom_site.z));
-                occupancies.push(atom_site.occupancy);
-                b_factors.push(atom_site.b_factor);
+                let identity = (
+                    atom_site.auth_seq_id,
+                    atom_site.pdbx_ins_code.clone(),
+                    atom_site.label_atom_id.clone(),
+                );
+                if seen_atoms.insert(identity) {
+                    atoms.push(Atom::new(atom_site.type_symbol, atom_site.label_atom_id.clone()));
+                }
+                match &atom_site.label_alt_id {
+                    None => {
+                        for (_, conformer) in conformers.iter_mut() {
+                            conformer.0.push(Position::new(atom_site.x, atom_site.y, atom_site.z));
+                            conformer.1.push(atom_site.occupancy);
+                            conformer.2.push(atom_site.b_factor);
+                        }
+                    }
+                    alt_id => match conformers.get_mut(&alt_id) {
+                        None => {
+                            let template = conformers.get(&None).unwrap();
+                            let mut new_positions = template.0.clone();
+                            new_positions.push(Position::new(atom_site.x, atom_site.y, atom_site.z));
+                            let mut new_occupancies = template.1.clone();
+                            new_occupancies.push(atom_site.occupancy);
+                            let mut new_b_factors = template.2.clone();
+                            new_b_factors.push(atom_site.b_factor);
+                            conformers.insert(alt_id.clone(), (new_positions, new_occupancies, new_b_factors));
+                        }
+                        Some(conformer) => {
+                            conformer.0.push(Position::new(atom_site.x, atom_site.y, atom_site.z));
+                            conformer.1.push(atom_site.occupancy);
+                            conformer.2.push(atom_site.b_factor);
+                        }
+                    },
+                }
 
-                let residue_end = i + 1 == atom_sites.len() || atom_sites[i + 1].auth_seq_id != atom_site.auth_seq_id;
-                if residue_end {
+                let build_resiude = i + 1 == atom_sites.len() || atom_sites[i + 1].auth_seq_id != atom_site.auth_seq_id;
+                if build_resiude {
                     residues.push(Residue::new(
                         atom_site.label_comp_id.clone(),
                         Range {
                             start: residue_start,
-                            end: i + 1, // end is exclusive
+                            end: atoms.len() + 1, // end is exclusive
                         },
                         atom_sites[i].is_hetero,
                     ));
                     residue_start = i + 1;
                 }
             }
-            let conformer = Conformer::new(positions, occupancies, b_factors);
-            let bonds = Bond::perceive_bonds(&atoms, &conformer);
+            let keep_none = conformers.len() == 1;
+            let conformers: Vec<Conformer> = conformers
+                .into_iter()
+                .filter(|c| c.0.is_some() || keep_none)
+                .map(|conformer| {
+                    assert!(conformer.1 .0.len() == atoms.len());
+                    Conformer::new(conformer.1 .0, conformer.1 .1, conformer.1 .2)
+                })
+                .collect();
+            let bonds = Bond::perceive_bonds(&atoms, &conformers[0]);
             let topology = Topology::new(entity.name.clone(), atoms, residues, bonds);
-            molecules.push(Molecule::new(topology, conformer));
+            ensembles.push(Ensemble::new(topology, conformers));
         }
-        molecules
+        ensembles
     }
 
     pub fn entities(&self) -> impl Iterator<Item = &Entity> {

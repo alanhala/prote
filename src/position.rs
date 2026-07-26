@@ -1,6 +1,6 @@
 use crate::kdtree::SpatialPoint;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Position {
     pub x: f64,
     pub y: f64,
