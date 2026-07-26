@@ -37,6 +37,19 @@ pub struct SaveFrame {
     pub(crate) items: Vec<Member>,
 }
 
+#[derive(Debug)]
+pub struct Row<'a> {
+    tags: &'a [String],
+    values: &'a [Value],
+}
+
+impl<'a> Row<'a> {
+    pub fn get(&self, tag: &str) -> Option<&'a Value> {
+        let i = self.tags.iter().position(|t| t.eq_ignore_ascii_case(tag))?;
+        self.values.get(i)
+    }
+}
+
 impl Cif {
     pub fn block(&self, name: &str) -> Option<&DataBlock> {
         self.blocks.iter().find(|b| b.name.eq_ignore_ascii_case(name))
@@ -44,6 +57,13 @@ impl Cif {
 }
 
 impl DataBlock {
+    pub fn loop_by_category(&self, category: &str) -> Option<&Loop> {
+        self.items.iter().find_map(|m| match m {
+            Member::Loop(l) if l.category().is_some_and(|c| c.eq_ignore_ascii_case(category)) => Some(l),
+            _ => None,
+        })
+    }
+
     pub fn get(&self, tag: &str) -> Option<&Value> {
         self.items.iter().find_map(|m| match m {
             Member::Item { tag: t, value } if t.eq_ignore_ascii_case(tag) => Some(value),
@@ -68,6 +88,10 @@ impl Loop {
         self.tags.iter().position(|t| t.eq_ignore_ascii_case(tag))
     }
 
+    pub fn category(&self) -> Option<&str> {
+        self.tags.first()?.split('.').next()
+    }
+
     pub fn has_tag(&self, tag: &str) -> bool {
         self.tag_index(tag).is_some()
     }
@@ -75,6 +99,11 @@ impl Loop {
     pub fn column(&self, tag: &str) -> Option<impl Iterator<Item = &Value> + '_> {
         let i = self.tag_index(tag)?;
         Some(self.rows.iter().map(move |row| &row[i]))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Row<'_>> + '_ {
+        let tags: &[String] = &self.tags;
+        self.rows.iter().map(move |values| Row { tags, values })
     }
 }
 
