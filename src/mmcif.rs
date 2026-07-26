@@ -3,6 +3,9 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::atom::{Atom, Element};
+use crate::conformer::Conformer;
+use crate::molecule::Molecule;
+use crate::position::Position;
 use crate::residue::Residue;
 use crate::topology::Topology;
 use crate::{Cif, Row, Value};
@@ -111,6 +114,11 @@ pub struct AtomSite {
     pub label_comp_id: String,
     pub type_symbol: Element,
     pub is_hetero: bool,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub occupancy: f32,
+    pub b_factor: f32,
 }
 
 #[derive(Debug)]
@@ -173,6 +181,11 @@ impl MmCIF {
                 let label_comp_id = field(&row, "_atom_site.label_comp_id", Value::as_str)?.to_string();
                 let type_symbol = field(&row, "_atom_site.type_symbol", element)?;
                 let is_hetero_atom = field(&row, "_atom_site.group_PDB", is_hetero)?;
+                let x = field(&row, "_atom_site.Cartn_x", Value::as_float)?;
+                let y = field(&row, "_atom_site.Cartn_y", Value::as_float)?;
+                let z = field(&row, "_atom_site.Cartn_z", Value::as_float)?;
+                let occupancy = field(&row, "_atom_site.occupancy", Value::as_float)? as f32;
+                let b_factor = field(&row, "_atom_site.B_iso_or_equiv", Value::as_float)? as f32;
                 atom_sites.entry(label_asym_id.clone()).or_default().push(AtomSite {
                     id,
                     label_entity_id,
@@ -182,6 +195,11 @@ impl MmCIF {
                     label_comp_id,
                     type_symbol,
                     is_hetero: is_hetero_atom,
+                    x,
+                    y,
+                    z,
+                    occupancy,
+                    b_factor,
                 });
             }
         }
@@ -238,16 +256,27 @@ impl MmCIF {
         })
     }
 
-    pub fn build_topologies(&self) -> Vec<Topology> {
-        let mut topologies: Vec<Topology> = vec![];
+    // TODO: return Result<Vec<Molecule>, MmCifError> instead of unwrapping —
+    // a struct_asym with no matching entity_id or no atom_site rows is a
+    // malformed-file problem, not an invariant of this program, same as the
+    // field-level errors in `new`.
+    pub fn build_molecules(&self) -> Vec<Molecule> {
+        let mut molecules: Vec<Molecule> = vec![];
         for struct_asym in self.struct_asym() {
             let entity = self.entity(struct_asym.entity_id).unwrap();
             let mut residues: Vec<Residue> = vec![];
             let mut atoms: Vec<Atom> = vec![];
+            let mut positions: Vec<Position> = vec![];
+            let mut occupancies: Vec<f32> = vec![];
+            let mut b_factors: Vec<f32> = vec![];
             let atom_sites = self.atom_sites(&struct_asym.id).unwrap();
             let mut residue_start = 0;
             for (i, atom_site) in atom_sites.iter().enumerate() {
                 atoms.push(Atom::new(atom_site.type_symbol, atom_site.label_atom_id.clone()));
+                positions.push(Position::new(atom_site.x, atom_site.y, atom_site.z));
+                occupancies.push(atom_site.occupancy);
+                b_factors.push(atom_site.b_factor);
+
                 let residue_end = i + 1 == atom_sites.len() || atom_sites[i + 1].auth_seq_id != atom_site.auth_seq_id;
                 if residue_end {
                     residues.push(Residue::new(
@@ -261,9 +290,12 @@ impl MmCIF {
                     residue_start = i + 1;
                 }
             }
-            topologies.push(Topology::new(entity.name.clone(), atoms, residues));
+            molecules.push(Molecule::new(
+                Topology::new(entity.name.clone(), atoms, residues),
+                Conformer::new(positions, occupancies, b_factors),
+            ));
         }
-        topologies
+        molecules
     }
 
     pub fn entities(&self) -> impl Iterator<Item = &Entity> {
