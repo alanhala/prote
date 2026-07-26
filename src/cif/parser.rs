@@ -76,7 +76,7 @@ impl<'a> Parser<'a> {
                 let cols = tags.len();
                 assert!(cols > 0, "loop_ has no tags");
                 assert!(!values.is_empty(), "loop_ has no values");
-                assert!(values.len() % cols == 0, "loop values not a multiple of tags");
+                assert!(values.len().is_multiple_of(cols), "loop values not a multiple of tags");
 
                 let mut it = values.into_iter();
                 let mut rows = Vec::new();

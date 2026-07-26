@@ -128,12 +128,8 @@ impl<'a> Lexer<'a> {
     fn lex_quoted(&mut self, quote: char, c_onwards: &'a str, c_at: usize) -> Result<Token<'a>, LexError> {
         let q = quote as u8;
         let bytes = self.rest.as_bytes();
-        let close = (0..bytes.len()).find(|&i| {
-            bytes[i] == q
-                && bytes
-                    .get(i + 1)
-                    .map_or(true, |&n| matches!(n as char, SP | HT | LF | CR))
-        });
+        let close = (0..bytes.len())
+            .find(|&i| bytes[i] == q && bytes.get(i + 1).is_none_or(|&n| matches!(n as char, SP | HT | LF | CR)));
         match close {
             None => Err(LexError::UnterminatedString { quote, at: c_at }),
             Some(rel) => {
