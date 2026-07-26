@@ -3,6 +3,10 @@ use std::marker::PhantomData;
 type Id = usize;
 type Point<T, const D: usize> = [T; D];
 
+pub trait SpatialPoint<T, const D: usize> {
+    fn point(&self) -> Point<T, D>;
+}
+
 #[derive(Debug)]
 struct Arena {
     nodes: Vec<Node>,
@@ -44,17 +48,19 @@ where
     T: Clone,
     T: Copy,
 {
-    pub fn new(points: &[Point<T, D>]) -> Self {
+    pub fn new<P: SpatialPoint<T, D>>(points: &[P]) -> Self {
         assert!(!points.is_empty(), "points must not be empty");
         let mut arena = Arena::new();
         let sorted_by_axes: Vec<Vec<Id>> = (0..D)
             .map(|axis| {
                 let mut ids: Vec<Id> = (0..points.len()).collect();
                 ids.sort_by(|&a, &b| {
-                    points[a][axis]
-                        .partial_cmp(&points[b][axis])
+                    let pa = points[a].point();
+                    let pb = points[b].point();
+                    pa[axis]
+                        .partial_cmp(&pb[axis])
                         .unwrap()
-                        .then_with(|| points[a].iter().partial_cmp(points[b].iter()).unwrap())
+                        .then_with(|| pa.iter().partial_cmp(pb.iter()).unwrap())
                 });
                 ids
             })
@@ -67,14 +73,14 @@ where
         }
     }
 
-    pub fn search(&self, points: &[Point<T, D>], min: Point<T, D>, max: Point<T, D>) -> Vec<Id> {
+    pub fn search<P: SpatialPoint<T, D>>(&self, points: &[P], min: Point<T, D>, max: Point<T, D>) -> Vec<Id> {
         let mut reported_nodes: Vec<Id> = vec![];
         Self::report_tree(points, &self.arena, &mut reported_nodes, self.root, 0, min, max);
         reported_nodes
     }
 
-    fn report_tree(
-        points: &[Point<T, D>],
+    fn report_tree<P: SpatialPoint<T, D>>(
+        points: &[P],
         arena: &Arena,
         reported_nodes: &mut Vec<Id>,
         node: usize,
@@ -85,15 +91,16 @@ where
         let axis = depth % D;
         match arena.nodes[node] {
             Node::Leaf { id } => {
-                if Self::point_contained(points[id], min, max) {
+                if Self::point_contained(points[id].point(), min, max) {
                     reported_nodes.push(id);
                 }
             }
             Node::Split { split, left, right } => {
-                if points[split][axis] >= min[axis] {
+                let split_value = points[split].point()[axis];
+                if split_value >= min[axis] {
                     Self::report_tree(points, arena, reported_nodes, left, depth + 1, min, max);
                 }
-                if points[split][axis] <= max[axis] {
+                if split_value <= max[axis] {
                     Self::report_tree(points, arena, reported_nodes, right, depth + 1, min, max);
                 }
             }
@@ -108,7 +115,12 @@ where
             .all(|((vi, lo), hi)| vi >= lo && vi <= hi)
     }
 
-    fn build(arena: &mut Arena, points: &[Point<T, D>], sorted_by_axes: Vec<Vec<Id>>, depth: usize) -> Option<usize> {
+    fn build<P: SpatialPoint<T, D>>(
+        arena: &mut Arena,
+        points: &[P],
+        sorted_by_axes: Vec<Vec<Id>>,
+        depth: usize,
+    ) -> Option<usize> {
         let axis = depth % D;
         match sorted_by_axes[axis].len() {
             0 => None,
@@ -118,6 +130,7 @@ where
             n => {
                 let split = (n - 1) / 2;
                 let median = sorted_by_axes[axis][split];
+                let median_point = points[median].point();
                 let (left, right): (Vec<Vec<Id>>, Vec<Vec<Id>>) = (0..D)
                     .map(|i| {
                         if i == axis {
@@ -127,10 +140,11 @@ where
                         } else {
                             let (left, right): (Vec<Id>, Vec<Id>) =
                                 sorted_by_axes[i].iter().copied().partition(|&id| {
-                                    points[id][axis]
-                                        .partial_cmp(&points[median][axis])
+                                    let p = points[id].point();
+                                    p[axis]
+                                        .partial_cmp(&median_point[axis])
                                         .unwrap()
-                                        .then_with(|| points[id].partial_cmp(&points[median]).unwrap())
+                                        .then_with(|| p.iter().partial_cmp(median_point.iter()).unwrap())
                                         .is_le()
                                 });
                             (left, right)

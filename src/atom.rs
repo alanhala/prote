@@ -3,7 +3,7 @@ use std::fmt;
 #[derive(Debug)]
 pub struct Atom {
     element: Element,
-    name: String,
+    pub name: String,
 }
 
 impl Atom {

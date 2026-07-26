@@ -3,7 +3,7 @@ use crate::residue::Residue;
 
 #[derive(Debug)]
 pub struct Topology {
-    name: String,
+    pub name: String,
     atoms: Vec<Atom>,
     residues: Vec<Residue>,
 }
