@@ -1,14 +1,14 @@
-use crate::position::Position;
+use crate::geometry::Point3;
 
 #[derive(Debug)]
 pub struct Conformer {
-    pub positions: Vec<Position>,
+    pub positions: Vec<Point3>,
     pub occupancies: Vec<f32>,
     pub b_factors: Vec<f32>,
 }
 
 impl Conformer {
-    pub fn new(positions: Vec<Position>, occupancies: Vec<f32>, b_factors: Vec<f32>) -> Self {
+    pub fn new(positions: Vec<Point3>, occupancies: Vec<f32>, b_factors: Vec<f32>) -> Self {
         Self {
             positions,
             occupancies,

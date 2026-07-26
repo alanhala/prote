@@ -5,7 +5,7 @@ use std::ops::Range;
 use crate::atom::{Atom, Element};
 use crate::conformer::Conformer;
 use crate::ensemble::Ensemble;
-use crate::position::Position;
+use crate::geometry::Point3;
 use crate::residue::Residue;
 use crate::topology::Topology;
 use crate::{Cif, Row, Value};
@@ -273,7 +273,7 @@ impl MmCIF {
         let mut ensembles: Vec<Ensemble> = vec![];
         for struct_asym in self.struct_asym() {
             let entity = self.entity(struct_asym.entity_id).unwrap();
-            let mut conformers: HashMap<Option<String>, (Vec<Position>, Vec<f32>, Vec<f32>)> = HashMap::new();
+            let mut conformers: HashMap<Option<String>, (Vec<Point3>, Vec<f32>, Vec<f32>)> = HashMap::new();
             conformers.insert(None, (vec![], vec![], vec![]));
             let mut residues: Vec<Residue> = vec![];
             let mut atoms: Vec<Atom> = vec![];
@@ -296,7 +296,7 @@ impl MmCIF {
                 match &atom_site.label_alt_id {
                     None => {
                         for (_, conformer) in conformers.iter_mut() {
-                            conformer.0.push(Position::new(atom_site.x, atom_site.y, atom_site.z));
+                            conformer.0.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
                             conformer.1.push(atom_site.occupancy);
                             conformer.2.push(atom_site.b_factor);
                         }
@@ -305,7 +305,7 @@ impl MmCIF {
                         None => {
                             let template = conformers.get(&None).unwrap();
                             let mut new_positions = template.0.clone();
-                            new_positions.push(Position::new(atom_site.x, atom_site.y, atom_site.z));
+                            new_positions.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
                             let mut new_occupancies = template.1.clone();
                             new_occupancies.push(atom_site.occupancy);
                             let mut new_b_factors = template.2.clone();
@@ -313,7 +313,7 @@ impl MmCIF {
                             conformers.insert(alt_id.clone(), (new_positions, new_occupancies, new_b_factors));
                         }
                         Some(conformer) => {
-                            conformer.0.push(Position::new(atom_site.x, atom_site.y, atom_site.z));
+                            conformer.0.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
                             conformer.1.push(atom_site.occupancy);
                             conformer.2.push(atom_site.b_factor);
                         }
@@ -326,11 +326,11 @@ impl MmCIF {
                         atom_site.label_comp_id.clone(),
                         Range {
                             start: residue_start,
-                            end: atoms.len() + 1, // end is exclusive
+                            end: atoms.len(), // end is exclusive
                         },
                         atom_sites[i].is_hetero,
                     ));
-                    residue_start = i + 1;
+                    residue_start = atoms.len();
                 }
             }
             let keep_none = conformers.len() == 1;

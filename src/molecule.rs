@@ -1,13 +1,13 @@
 use crate::{conformer::Conformer, topology::Topology};
 
 #[derive(Debug)]
-pub struct Molecule {
-    pub topology: Topology,
-    pub conformer: Conformer,
+pub struct Molecule<'a> {
+    pub topology: &'a Topology,
+    pub conformer: &'a Conformer,
 }
 
-impl Molecule {
-    pub fn new(topology: Topology, conformer: Conformer) -> Self {
+impl<'a> Molecule<'a> {
+    pub fn new(topology: &'a Topology, conformer: &'a Conformer) -> Self {
         Self { topology, conformer }
     }
 }
