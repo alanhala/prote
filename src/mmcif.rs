@@ -3,6 +3,7 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::atom::{Atom, Element};
+use crate::bond::Bond;
 use crate::conformer::Conformer;
 use crate::molecule::Molecule;
 use crate::position::Position;
@@ -290,10 +291,10 @@ impl MmCIF {
                     residue_start = i + 1;
                 }
             }
-            molecules.push(Molecule::new(
-                Topology::new(entity.name.clone(), atoms, residues),
-                Conformer::new(positions, occupancies, b_factors),
-            ));
+            let conformer = Conformer::new(positions, occupancies, b_factors);
+            let bonds = Bond::perceive_bonds(&atoms, &conformer);
+            let topology = Topology::new(entity.name.clone(), atoms, residues, bonds);
+            molecules.push(Molecule::new(topology, conformer));
         }
         molecules
     }

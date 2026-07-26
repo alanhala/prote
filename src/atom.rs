@@ -36,6 +36,10 @@ impl Atom {
     pub fn van_der_waals_radius(&self) -> f64 {
         self.element.van_der_waals_radius()
     }
+
+    pub fn lennard_jones(&self) -> Option<LennardJones> {
+        self.element.lennard_jones()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -44,6 +48,19 @@ pub struct Properties {
     pub name: &'static str,
     pub weight: f64,
     pub covalent_radius: f64,
+}
+
+/// Generic, per-element (not per-atom-type) Lennard-Jones parameters, in
+/// Ångström and kcal/mol. Derived from AMBER parm99's generic nonbonded
+/// atom types (CT, N, O, S, P, F, Cl, Br) via σ = 2·R*/2^(1/6), where R*
+/// (Rmin/2) is AMBER's native parameter. Collapsing to one row per element
+/// hides real per-atom-type variation AMBER tracks (e.g. carbonyl vs.
+/// hydroxyl vs. ether oxygen) — fine for a coarse walking-skeleton energy
+/// estimate, not for atom-type-specific force-field work.
+#[derive(Clone, Copy, Debug)]
+pub struct LennardJones {
+    pub sigma: f64,
+    pub epsilon: f64,
 }
 
 #[repr(u8)]
@@ -317,6 +334,50 @@ impl Element {
             | Element::Lv
             | Element::Ts
             | Element::Og => panic!("no van der Waals radius data for this element"),
+        }
+    }
+
+    /// Generic Lennard-Jones σ/ε for this element, or `None` if this table
+    /// doesn't cover it. See `LennardJones` for the source and caveats.
+    pub const fn lennard_jones(self) -> Option<LennardJones> {
+        match self {
+            Element::H => Some(LennardJones {
+                sigma: 1.069,
+                epsilon: 0.0157,
+            }),
+            Element::C => Some(LennardJones {
+                sigma: 3.400,
+                epsilon: 0.1094,
+            }),
+            Element::N => Some(LennardJones {
+                sigma: 3.250,
+                epsilon: 0.1700,
+            }),
+            Element::O => Some(LennardJones {
+                sigma: 2.960,
+                epsilon: 0.2100,
+            }),
+            Element::S => Some(LennardJones {
+                sigma: 3.564,
+                epsilon: 0.2500,
+            }),
+            Element::P => Some(LennardJones {
+                sigma: 3.742,
+                epsilon: 0.2000,
+            }),
+            Element::F => Some(LennardJones {
+                sigma: 3.118,
+                epsilon: 0.0610,
+            }),
+            Element::Cl => Some(LennardJones {
+                sigma: 3.471,
+                epsilon: 0.2650,
+            }),
+            Element::Br => Some(LennardJones {
+                sigma: 3.956,
+                epsilon: 0.3200,
+            }),
+            _ => None,
         }
     }
 

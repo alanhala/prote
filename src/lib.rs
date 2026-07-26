@@ -1,4 +1,5 @@
 pub mod atom;
+pub mod bond;
 pub mod cif;
 pub mod conformer;
 pub mod kdtree;
