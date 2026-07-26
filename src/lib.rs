@@ -1,6 +1,7 @@
 pub mod atom;
 pub mod cif;
 pub mod conformer;
+pub mod kdtree;
 pub mod mmcif;
 pub mod molecule;
 pub mod position;
