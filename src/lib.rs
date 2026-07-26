@@ -1,6 +1,7 @@
 pub mod atom;
 pub mod bond;
 pub mod cif;
+pub mod mmcif;
 pub mod residue;
 pub mod topology;
 
