@@ -3,7 +3,6 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::atom::{Atom, Element};
-use crate::bond::Bond;
 use crate::conformer::Conformer;
 use crate::ensemble::Ensemble;
 use crate::position::Position;
@@ -343,8 +342,7 @@ impl MmCIF {
                     Conformer::new(conformer.1 .0, conformer.1 .1, conformer.1 .2)
                 })
                 .collect();
-            let bonds = Bond::perceive_bonds(&atoms, &conformers[0]);
-            let topology = Topology::new(entity.name.clone(), atoms, residues, bonds);
+            let topology = Topology::new(entity.name.clone(), atoms, residues);
             ensembles.push(Ensemble::new(topology, conformers));
         }
         ensembles

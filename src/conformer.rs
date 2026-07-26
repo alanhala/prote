@@ -1,4 +1,4 @@
-use crate::{kdtree::KdTree, position::Position};
+use crate::position::Position;
 
 #[derive(Debug)]
 pub struct Conformer {
@@ -14,9 +14,5 @@ impl Conformer {
             occupancies,
             b_factors,
         }
-    }
-
-    pub fn spatial_index(&self) -> KdTree<f64, 3> {
-        KdTree::new(&self.positions)
     }
 }
