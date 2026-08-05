@@ -2,7 +2,7 @@ use std::fmt;
 
 #[derive(Debug)]
 pub struct Atom {
-    element: Element,
+    pub element: Element,
     pub name: String,
 }
 
@@ -39,6 +39,10 @@ impl Atom {
 
     pub fn lennard_jones(&self) -> Option<LennardJones> {
         self.element.lennard_jones()
+    }
+
+    pub fn typical_valence(&self) -> Option<u8> {
+        self.element().typical_valence()
     }
 }
 
@@ -378,6 +382,40 @@ impl Element {
                 epsilon: 0.3200,
             }),
             _ => None,
+        }
+    }
+
+    pub const fn valence_electrons(self) -> Option<u8> {
+        match self {
+            // Group 1
+            Element::H | Element::Li | Element::Na | Element::K | Element::Rb | Element::Cs | Element::Fr => Some(1),
+            // Group 2
+            Element::Be | Element::Mg | Element::Ca | Element::Sr | Element::Ba | Element::Ra => Some(2),
+            // Group 13
+            Element::B | Element::Al | Element::Ga | Element::In | Element::Tl | Element::Nh => Some(3),
+            // Group 14
+            Element::C | Element::Si | Element::Ge | Element::Sn | Element::Pb | Element::Fl => Some(4),
+            // Group 15
+            Element::N | Element::P | Element::As | Element::Sb | Element::Bi | Element::Mc => Some(5),
+            // Group 16
+            Element::O | Element::S | Element::Se | Element::Te | Element::Po | Element::Lv => Some(6),
+            // Group 17 (halogens)
+            Element::F | Element::Cl | Element::Br | Element::I | Element::At | Element::Ts => Some(7),
+            // Group 18 (noble gases) — He is the one exception: a full 1s shell is 2
+            // electrons, not 8, since there's no 2s/2p to fill at that shell.
+            Element::He => Some(2),
+            Element::Ne | Element::Ar | Element::Kr | Element::Xe | Element::Rn | Element::Og => Some(8),
+            _ => None,
+        }
+    }
+
+    pub const fn typical_valence(self) -> Option<u8> {
+        match self {
+            Element::H => Some(1),
+            _ => match self.valence_electrons() {
+                Some(v) if v >= 4 => Some(8 - v),
+                _ => None,
+            },
         }
     }
 
