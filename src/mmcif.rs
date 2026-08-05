@@ -343,7 +343,7 @@ impl MmCIF {
                 })
                 .collect();
             let topology = Topology::new(entity.name.clone(), atoms, residues);
-            ensembles.push(Ensemble::new(topology, conformers));
+            ensembles.push(Ensemble::new(ensembles.len(), topology, conformers));
         }
         ensembles
     }

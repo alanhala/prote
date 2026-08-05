@@ -1,7 +1,9 @@
 pub mod atom;
+pub mod atom_pointer;
 pub mod bond;
 pub mod bond_angle;
 pub mod bond_graph;
+pub mod bond_order;
 pub mod cif;
 pub mod conformer;
 pub mod ensemble;

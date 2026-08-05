@@ -1,44 +1,56 @@
-use crate::{atom::Atom, bond::Bond, bond_angle::BondAngle, geometry::Point3, spatial_index::SpatialIndex};
+use crate::{
+    atom_pointer::AtomPointer, bond::Bond, bond_angle::BondAngle, molecule::Molecule, spatial_index::SpatialIndex,
+};
 
+#[derive(Debug)]
 pub struct BondGraph {
-    bonds: Vec<Vec<Bond>>,
-    angles: Vec<Vec<BondAngle>>,
+    pub bonds: Vec<Vec<Bond>>,
+    pub angles: Vec<Vec<BondAngle>>,
 }
 
 impl BondGraph {
-    pub fn new(atoms: &[Atom], positions: &[Point3]) -> Self {
-        let spatial_index = SpatialIndex::new(positions);
-        let mut bonds: Vec<Vec<Bond>> = (0..atoms.len()).map(|_| Vec::new()).collect();
-        let mut angles: Vec<Vec<BondAngle>> = (0..atoms.len()).map(|_| Vec::new()).collect();
-        for (atom_index, atom) in atoms.iter().enumerate() {
-            let position = &positions[atom_index];
-            let search_radius = atom.covalent_radius() + 3.0; // TODO: use a better one
-            let min = [
-                position.x - search_radius,
-                position.y - search_radius,
-                position.z - search_radius,
-            ];
-            let max = [
-                position.x + search_radius,
-                position.y + search_radius,
-                position.z + search_radius,
-            ];
-            for neighbor in spatial_index.search(positions, min, max) {
-                let in_contact = positions[atom_index].distance(&positions[neighbor])
-                    <= atom.covalent_radius() + atoms[neighbor].covalent_radius();
-                if neighbor != atom_index && in_contact {
-                    bonds[atom_index].push(Bond::new(atom_index, neighbor));
-                }
+    pub fn new(search: &Molecule, spatial_index: &SpatialIndex, query: &Molecule) -> Self {
+        let mut bonds: Vec<Vec<Bond>> = (0..search.topology.atoms.len()).map(|_| Vec::new()).collect();
+        for (query_index, query_atom) in query.topology.atoms.iter().enumerate() {
+            let position = &query.conformer.positions[query_index];
+            let search_radius = query_atom.covalent_radius() + 3.0;
+            let hits = spatial_index.candidates_within(
+                &search.conformer.positions,
+                position,
+                search_radius,
+                |neighbor, distance| {
+                    let same_atom = search.ensemble_id == query.ensemble_id
+                        && search.conformer_id == query.conformer_id
+                        && neighbor == query_index;
+                    !same_atom
+                        && distance
+                            <= query_atom.covalent_radius() + search.topology.atoms[neighbor].covalent_radius() * 1.3
+                },
+            );
+            for (neighbor, _) in hits {
+                let search_pointer = AtomPointer::new(search.ensemble_id, search.conformer_id, neighbor);
+                let query_pointer = AtomPointer::new(query.ensemble_id, query.conformer_id, query_index);
+                bonds[neighbor].push(Bond::new(search_pointer, query_pointer));
             }
-            match bonds[atom_index].len() {
+        }
+
+        let mut angles: Vec<Vec<BondAngle>> = (0..search.topology.atoms.len()).map(|_| Vec::new()).collect();
+        for (atom_index, atom_bonds) in bonds.iter().enumerate() {
+            match atom_bonds.len() {
                 0 | 1 => {}
                 bonds_len => {
+                    let vertex_pointer = AtomPointer::new(search.ensemble_id, search.conformer_id, atom_index);
+                    let vertex_position = &search.conformer.positions[atom_index];
                     for i in 0..(bonds_len - 1) {
                         for j in (i + 1)..bonds_len {
+                            let atom_pointer_1 = atom_bonds[i].atom_2;
+                            let atom_pointer_2 = atom_bonds[j].atom_2;
+                            let atom_1_position = &query.conformer.positions[atom_pointer_1.index];
+                            let atom_2_position = &query.conformer.positions[atom_pointer_2.index];
                             angles[atom_index].push(BondAngle::new(
-                                bonds[atom_index][i].atom_2,
-                                atom_index,
-                                bonds[atom_index][j].atom_2,
+                                (atom_pointer_1, atom_1_position),
+                                (vertex_pointer, vertex_position),
+                                (atom_pointer_2, atom_2_position),
                             ))
                         }
                     }
@@ -46,13 +58,5 @@ impl BondGraph {
             }
         }
         Self { bonds, angles }
-    }
-
-    pub fn bond_count(&self) -> usize {
-        self.bonds.iter().map(Vec::len).sum()
-    }
-
-    pub fn angles(&self) -> impl Iterator<Item = &BondAngle> {
-        self.angles.iter().flatten()
     }
 }

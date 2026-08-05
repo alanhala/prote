@@ -1,24 +1,30 @@
-use crate::geometry::Point3;
+use crate::{atom_pointer::AtomPointer, geometry::Point3};
 
+#[derive(Debug)]
 pub struct BondAngle {
-    atom_1: usize,
-    vertex: usize,
-    atom_2: usize,
+    atom_1: AtomPointer,
+    vertex: AtomPointer,
+    atom_2: AtomPointer,
+    value: f64,
 }
 
 impl BondAngle {
-    pub fn new(atom_1: usize, vertex: usize, atom_2: usize) -> Self {
-        Self { atom_1, vertex, atom_2 }
+    pub fn new(atom_1: (AtomPointer, &Point3), vertex: (AtomPointer, &Point3), atom_2: (AtomPointer, &Point3)) -> Self {
+        let (atom_1, atom_1_position) = atom_1;
+        let (vertex, vertex_position) = vertex;
+        let (atom_2, atom_2_position) = atom_2;
+        let arm_1 = *vertex_position - *atom_1_position;
+        let arm_2 = *vertex_position - *atom_2_position;
+        let value = arm_1.angle(&arm_2);
+        Self {
+            atom_1,
+            vertex,
+            atom_2,
+            value,
+        }
     }
 
-    pub fn atoms(&self) -> (usize, usize, usize) {
-        (self.atom_1, self.vertex, self.atom_2)
-    }
-
-    pub fn value(&self, positions: &[Point3]) -> f64 {
-        let vertex = positions[self.vertex];
-        let arm_1 = positions[self.atom_1] - vertex;
-        let arm_2 = positions[self.atom_2] - vertex;
-        arm_1.angle(&arm_2)
+    pub fn atoms(&self) -> (&AtomPointer, &AtomPointer, &AtomPointer) {
+        (&self.atom_1, &self.vertex, &self.atom_2)
     }
 }
