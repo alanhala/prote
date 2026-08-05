@@ -79,8 +79,14 @@ ATOM 3 \"O5'\" 13.000 14.000 3.000\n\
 
         assert_eq!(plain.block("x").unwrap().name, with_trivia.block("x").unwrap().name);
         assert!(matches!(
-            (plain.block("x").unwrap().get("_a"), with_trivia.block("x").unwrap().get("_a")),
-            (Some(Value::Integer { value: 1, .. }), Some(Value::Integer { value: 1, .. }))
+            (
+                plain.block("x").unwrap().get("_a"),
+                with_trivia.block("x").unwrap().get("_a")
+            ),
+            (
+                Some(Value::Integer { value: 1, .. }),
+                Some(Value::Integer { value: 1, .. })
+            )
         ));
     }
 

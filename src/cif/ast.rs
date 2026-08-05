@@ -1,6 +1,6 @@
 #[derive(Debug)]
 pub struct Cif {
-    pub(crate) blocks: Vec<DataBlock>,
+    pub blocks: Vec<DataBlock>,
 }
 
 #[derive(Debug)]
@@ -27,14 +27,14 @@ pub enum Value {
 
 #[derive(Debug)]
 pub struct Loop {
-    pub(crate) tags: Vec<String>,
-    pub(crate) rows: Vec<Vec<Value>>,
+    pub tags: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
 }
 
 #[derive(Debug)]
 pub struct SaveFrame {
-    pub(crate) name: String,
-    pub(crate) items: Vec<Member>,
+    pub name: String,
+    pub items: Vec<Member>,
 }
 
 #[derive(Debug)]
@@ -171,9 +171,7 @@ mod tests {
     // 3.2 Loop access
 
     fn atom_site_block() -> Cif {
-        Cif::new(
-            "data_x\nloop_\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n1.0 2.0\n3.0 4.0",
-        )
+        Cif::new("data_x\nloop_\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n1.0 2.0\n3.0 4.0")
     }
 
     #[test]
@@ -188,7 +186,11 @@ mod tests {
         let cif = atom_site_block();
         let block = cif.block("x").unwrap();
         let l = block.find_loop("_atom_site.Cartn_x").unwrap();
-        let ys: Vec<f64> = l.column("_atom_site.Cartn_y").unwrap().map(|v| v.as_float().unwrap()).collect();
+        let ys: Vec<f64> = l
+            .column("_atom_site.Cartn_y")
+            .unwrap()
+            .map(|v| v.as_float().unwrap())
+            .collect();
         assert_eq!(ys, vec![2.0, 4.0]);
     }
 
@@ -205,7 +207,11 @@ mod tests {
         let cif = atom_site_block();
         let block = cif.block("x").unwrap();
         let l = block.find_loop("_atom_site.Cartn_x").unwrap();
-        let xs: Vec<f64> = l.column("_atom_site.Cartn_x").unwrap().map(|v| v.as_float().unwrap()).collect();
+        let xs: Vec<f64> = l
+            .column("_atom_site.Cartn_x")
+            .unwrap()
+            .map(|v| v.as_float().unwrap())
+            .collect();
         assert_eq!(xs, vec![1.0, 3.0]);
     }
 
@@ -264,7 +270,11 @@ mod tests {
     fn data_block_column_delegates_to_the_loops_column() {
         let cif = atom_site_block();
         let block = cif.block("x").unwrap();
-        let via_block: Vec<f64> = block.column("_atom_site.Cartn_y").unwrap().map(|v| v.as_float().unwrap()).collect();
+        let via_block: Vec<f64> = block
+            .column("_atom_site.Cartn_y")
+            .unwrap()
+            .map(|v| v.as_float().unwrap())
+            .collect();
         let via_loop: Vec<f64> = block
             .find_loop("_atom_site.Cartn_y")
             .unwrap()
