@@ -3,6 +3,7 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::atom::{Atom, Element};
+use crate::bond_order::{BondOrder, BondOrderSource};
 use crate::conformer::Conformer;
 use crate::ensemble::Ensemble;
 use crate::geometry::Point3;
@@ -69,6 +70,25 @@ fn entity_kind(v: &Value) -> Option<EntityKind> {
     }
 }
 
+fn bond_order(v: &Value) -> Option<BondOrder> {
+    match v.as_str()? {
+        "sing" => Some(BondOrder::Single),
+        "doub" => Some(BondOrder::Double),
+        "trip" => Some(BondOrder::Triple),
+        "arom" => Some(BondOrder::Aromatic),
+        "pi" => Some(BondOrder::Pi),
+        _ => None,
+    }
+}
+
+fn flag(v: &Value) -> Option<bool> {
+    match v.as_str()? {
+        "N" => Some(false),
+        "Y" => Some(true),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct Entity {
     pub id: u8,
@@ -127,19 +147,8 @@ pub struct AtomSite {
 
 #[derive(Debug)]
 pub struct ChemCompBond {
-    pub comp_id: String,
-    pub atom_id_1: String,
-    pub atom_id_2: String,
-}
-
-#[derive(Debug)]
-pub struct StructConn {
-    pub ptnr1_asym_id: String,
-    pub ptnr1_seq_id: Option<i64>,
-    pub ptnr1_atom_id: String,
-    pub ptnr2_asym_id: String,
-    pub ptnr2_seq_id: Option<i64>,
-    pub ptnr2_atom_id: String,
+    pub value_order: BondOrder,
+    pub aromatic_flag: bool,
 }
 
 #[derive(Debug)]
@@ -147,8 +156,29 @@ pub struct MmCIF {
     pub entities: HashMap<u8, Entity>,
     pub struct_asyms: HashMap<String, StructAsym>,
     pub atom_sites: HashMap<String, Vec<AtomSite>>,
-    pub chem_comp_bonds: HashMap<String, Vec<ChemCompBond>>,
-    pub struct_conns: Vec<StructConn>,
+    pub chem_comp_bonds: HashMap<(String, String, String), ChemCompBond>,
+}
+
+impl BondOrderSource for MmCIF {
+    fn bond_order(&self, topology: &Topology, atom_1: usize, atom_2: usize) -> Option<BondOrder> {
+        let res_1 = topology.residue_index_for(atom_1);
+        let res_2 = topology.residue_index_for(atom_2);
+        let atom_1 = &topology.atoms[atom_1];
+        let atom_2 = &topology.atoms[atom_2];
+        if res_1 == res_2 {
+            let res = &topology.residues[res_1];
+            match self.chem_comp_bonds_lookup(&res.name, &atom_1.name, &atom_2.name) {
+                None => None,
+                // TODO: this ignores `chem_comp_bond.aromatic_flag` — a ring bond currently
+                // resolves to whatever Kekulé value_order (Single/Double) the dictionary
+                // happens to record, never `BondOrder::Aromatic`. If `aromatic_flag` is true,
+                // return `Some(BondOrder::Aromatic)` instead of `value_order`.
+                Some(chem_comp_bond) => Some(chem_comp_bond.value_order),
+            }
+        } else {
+            None
+        }
+    }
 }
 
 impl MmCIF {
@@ -213,46 +243,21 @@ impl MmCIF {
             }
         }
 
-        let mut chem_comp_bonds: HashMap<String, Vec<ChemCompBond>> = HashMap::new();
+        let mut chem_comp_bonds: HashMap<(String, String, String), ChemCompBond> = HashMap::new();
         if let Some(loop_) = block.loop_by_category("_chem_comp_bond") {
             for row in loop_.iter() {
                 let comp_id = field(&row, "_chem_comp_bond.comp_id", Value::as_str)?.to_string();
                 let atom_id_1 = field(&row, "_chem_comp_bond.atom_id_1", Value::as_str)?.to_string();
                 let atom_id_2 = field(&row, "_chem_comp_bond.atom_id_2", Value::as_str)?.to_string();
-                chem_comp_bonds.entry(comp_id.clone()).or_default().push(ChemCompBond {
-                    comp_id,
-                    atom_id_1,
-                    atom_id_2,
-                });
-            }
-        }
-
-        let mut struct_conns = Vec::new();
-        if let Some(loop_) = block.loop_by_category("_struct_conn") {
-            for row in loop_.iter() {
-                let ptnr1_symmetry = field(&row, "_struct_conn.ptnr1_symmetry", Value::as_str)?;
-                let ptnr2_symmetry = field(&row, "_struct_conn.ptnr2_symmetry", Value::as_str)?;
-                if ptnr1_symmetry != "1_555" || ptnr2_symmetry != "1_555" {
-                    // Partner lives in a symmetry-generated copy, not this asymmetric
-                    // unit's own atoms — out of scope for now.
-                    continue;
-                }
-
-                let ptnr1_asym_id = field(&row, "_struct_conn.ptnr1_label_asym_id", Value::as_str)?.to_string();
-                let ptnr1_seq_id = optional_field(&row, "_struct_conn.ptnr1_label_seq_id", Value::as_int)?;
-                let ptnr1_atom_id = field(&row, "_struct_conn.ptnr1_label_atom_id", Value::as_str)?.to_string();
-                let ptnr2_asym_id = field(&row, "_struct_conn.ptnr2_label_asym_id", Value::as_str)?.to_string();
-                let ptnr2_seq_id = optional_field(&row, "_struct_conn.ptnr2_label_seq_id", Value::as_int)?;
-                let ptnr2_atom_id = field(&row, "_struct_conn.ptnr2_label_atom_id", Value::as_str)?.to_string();
-
-                struct_conns.push(StructConn {
-                    ptnr1_asym_id,
-                    ptnr1_seq_id,
-                    ptnr1_atom_id,
-                    ptnr2_asym_id,
-                    ptnr2_seq_id,
-                    ptnr2_atom_id,
-                });
+                let value_order = field(&row, "_chem_comp_bond.value_order", bond_order)?;
+                let aromatic_flag = field(&row, "_chem_comp_bond.pdbx_aromatic_flag", flag)?;
+                chem_comp_bonds.insert(
+                    (comp_id, atom_id_1, atom_id_2),
+                    ChemCompBond {
+                        value_order,
+                        aromatic_flag,
+                    },
+                );
             }
         }
 
@@ -261,7 +266,6 @@ impl MmCIF {
             struct_asyms,
             atom_sites,
             chem_comp_bonds,
-            struct_conns,
         })
     }
 
@@ -320,7 +324,9 @@ impl MmCIF {
                     },
                 }
 
-                let build_resiude = i + 1 == atom_sites.len() || atom_sites[i + 1].auth_seq_id != atom_site.auth_seq_id;
+                let build_resiude = i + 1 == atom_sites.len()
+                    || atom_sites[i + 1].auth_seq_id != atom_site.auth_seq_id
+                    || atom_sites[i + 1].pdbx_ins_code != atom_site.pdbx_ins_code;
                 if build_resiude {
                     residues.push(Residue::new(
                         atom_site.label_comp_id.clone(),
@@ -362,5 +368,14 @@ impl MmCIF {
 
     pub fn struct_asym(&self) -> impl Iterator<Item = &StructAsym> {
         self.struct_asyms.values()
+    }
+
+    fn chem_comp_bonds_lookup(&self, comp_id: &str, atom_1: &str, atom_2: &str) -> Option<&ChemCompBond> {
+        self.chem_comp_bonds
+            .get(&(comp_id.to_string(), atom_1.to_string(), atom_2.to_string()))
+            .or_else(|| {
+                self.chem_comp_bonds
+                    .get(&(comp_id.to_string(), atom_2.to_string(), atom_1.to_string()))
+            })
     }
 }

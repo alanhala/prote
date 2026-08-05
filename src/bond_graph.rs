@@ -1,5 +1,14 @@
 use crate::{
-    atom_pointer::AtomPointer, bond::Bond, bond_angle::BondAngle, molecule::Molecule, spatial_index::SpatialIndex,
+    atom::Atom,
+    atom_pointer::AtomPointer,
+    bond::Bond,
+    bond_angle::BondAngle,
+    bond_order::{BondOrder, BondOrderSource},
+    ensemble::{resolve, Ensemble},
+    geometry::Point3,
+    molecule::Molecule,
+    spatial_index::SpatialIndex,
+    topology::Topology,
 };
 
 #[derive(Debug)]
@@ -58,5 +67,63 @@ impl BondGraph {
             }
         }
         Self { bonds, angles }
+    }
+
+    pub fn assign_orders(&mut self, topology: &Topology, sources: &[&dyn BondOrderSource]) {
+        for bonds in self.bonds.iter_mut() {
+            for bond in bonds.iter_mut() {
+                bond.order = Self::resolve_bond_order(topology, &bond.atom_1, &bond.atom_2, sources);
+            }
+        }
+    }
+
+    /// `bonds` is that atom's whole bond list, unresolved entries included —
+    /// `filter_map` drops anything still `None` on its own, so there's no need
+    /// to exclude the bond currently being resolved by hand.
+    fn leftover_capacity(atom: &Atom, bonds: &[Bond]) -> Option<u8> {
+        let used: u8 = bonds.iter().filter_map(|bond| bond.order).map(BondOrder::as_u8).sum();
+        atom.typical_valence().map(|typical| typical.saturating_sub(used))
+    }
+
+    /// A second pass, run after `assign_orders`: for whatever's still `None`,
+    /// take each side's leftover valence capacity (from whichever of its other
+    /// bonds the dictionary/rules already resolved) and use the smaller of the
+    /// two. The smaller side is trustworthy even when the other side's count is
+    /// inflated by something missing from the data (e.g. an unresolved
+    /// hydrogen) — it can't suggest a higher order than the atom actually has
+    /// room for, so it can never be the wrong, inflated number.
+    pub fn assign_remaining_orders(&mut self, ensembles: &[Ensemble]) {
+        let mut updates: Vec<(usize, usize, BondOrder)> = Vec::new();
+        for (search_index, bonds) in self.bonds.iter().enumerate() {
+            for (bond_index, bond) in bonds.iter().enumerate() {
+                if bond.order.is_some() {
+                    continue;
+                }
+                let (atom_1, _) = resolve(ensembles, &bond.atom_1);
+                let (atom_2, _) = resolve(ensembles, &bond.atom_2);
+                let leftover_1 = Self::leftover_capacity(atom_1, &self.bonds[bond.atom_1.index]);
+                let leftover_2 = Self::leftover_capacity(atom_2, &self.bonds[bond.atom_2.index]);
+                let order = leftover_1
+                    .zip(leftover_2)
+                    .and_then(|(a, b)| BondOrder::from_u8(a.min(b)));
+                if let Some(order) = order {
+                    updates.push((search_index, bond_index, order));
+                }
+            }
+        }
+        for (search_index, bond_index, order) in updates {
+            self.bonds[search_index][bond_index].order = Some(order);
+        }
+    }
+
+    fn resolve_bond_order(
+        topology: &Topology,
+        atom_1: &AtomPointer,
+        atom_2: &AtomPointer,
+        sources: &[&dyn BondOrderSource],
+    ) -> Option<BondOrder> {
+        sources
+            .iter()
+            .find_map(|source| source.bond_order(topology, atom_1.index, atom_2.index))
     }
 }
