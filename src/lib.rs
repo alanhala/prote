@@ -6,6 +6,8 @@ pub mod bond_graph;
 pub mod bond_order;
 pub mod cif;
 pub mod conformer;
+pub mod contact;
+pub mod contact_graph;
 pub mod ensemble;
 pub mod geometry;
 pub mod kdtree;
