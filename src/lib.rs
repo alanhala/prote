@@ -13,6 +13,7 @@ pub mod geometry;
 pub mod kdtree;
 pub mod mmcif;
 pub mod molecule;
+pub mod proximity;
 pub mod residue;
 pub mod spatial_index;
 pub mod topology;

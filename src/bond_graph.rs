@@ -5,7 +5,6 @@ use crate::{
     bond_angle::BondAngle,
     bond_order::{BondOrder, BondOrderSource},
     ensemble::{resolve, Ensemble},
-    geometry::Point3,
     molecule::Molecule,
     spatial_index::SpatialIndex,
     topology::Topology,

@@ -1,6 +1,6 @@
 use crate::{
     atom::Atom, atom_pointer::AtomPointer, bond_graph::BondGraph, contact::Contact, geometry::Point3,
-    molecule::Molecule, spatial_index::SpatialIndex,
+    molecule::Molecule, proximity::Proximity, spatial_index::SpatialIndex,
 };
 
 #[derive(Debug)]
@@ -13,15 +13,13 @@ impl ContactGraph {
         let mut contacts: Vec<Vec<Contact>> = (0..search.topology.atoms.len()).map(|_| Vec::new()).collect();
         for (query_index, query_atom) in query.topology.atoms.iter().enumerate() {
             let position = &query.conformer.positions[query_index];
-            let search_radius = query_atom.van_der_waals_radius() + 3.0;
             let hits = spatial_index.candidates_within(
                 &search.conformer.positions,
                 position,
-                search_radius,
+                Proximity::search_radius(&Proximity::InContact, query_atom),
                 |neighbor, distance| {
-                    let redius_sum =
-                        query_atom.van_der_waals_radius() + search.topology.atoms[neighbor].van_der_waals_radius();
-                    distance <= redius_sum
+                    Proximity::classify(&query_atom, &search.topology.atoms[neighbor], distance)
+                        == Some(Proximity::InContact)
                 },
             );
             for (neighbor, distance) in hits {
@@ -33,28 +31,22 @@ impl ContactGraph {
         Self { contacts }
     }
 
-    /// Non-covalent contacts within a single molecule. Excludes pairs in the same
-    /// residue (residue-adjacent atoms are geometrically close by construction, not
-    /// because of a real non-covalent interaction) and pairs joined by a covalent
-    /// bond (e.g. the peptide bond between consecutive residues), which would
-    /// otherwise register as a spurious contact at bonding distance.
-    pub fn new_intramolecular(molecule: &Molecule, spatial_index: &SpatialIndex, bond_graph: &BondGraph) -> Self {
+    pub fn new_intramolecular(molecule: &Molecule, spatial_index: &SpatialIndex) -> Self {
         let topology = molecule.topology;
         let atoms = &topology.atoms;
         let positions = &molecule.conformer.positions;
         let mut contacts: Vec<Vec<Contact>> = (0..atoms.len()).map(|_| Vec::new()).collect();
         for (atom_index, atom) in atoms.iter().enumerate() {
             let residue_index = topology.residue_index_for(atom_index);
-            let search_radius = atom.van_der_waals_radius() + 3.0;
             let hits = spatial_index.candidates_within(
                 positions,
                 &positions[atom_index],
-                search_radius,
+                Proximity::search_radius(&Proximity::InContact, atom),
                 |neighbor, distance| {
                     neighbor > atom_index
                         && topology.residue_index_for(neighbor) != residue_index
-                        && !bond_graph.bonds[atom_index].iter().any(|bond| bond.atom_2.index == neighbor)
-                        && distance <= atom.van_der_waals_radius() + atoms[neighbor].van_der_waals_radius()
+                        && Proximity::classify(&atom, &molecule.topology.atoms[neighbor], distance)
+                            == Some(Proximity::InContact)
                 },
             );
             for (neighbor, distance) in hits {
