@@ -1,15 +1,19 @@
 use crate::{atom_pointer::AtomPointer, geometry::Point3};
 
 #[derive(Debug)]
-pub struct BondAngle {
-    atom_1: AtomPointer,
-    vertex: AtomPointer,
-    atom_2: AtomPointer,
+pub struct BondAngle<'a> {
+    atom_1: AtomPointer<'a>,
+    vertex: AtomPointer<'a>,
+    atom_2: AtomPointer<'a>,
     value: f64,
 }
 
-impl BondAngle {
-    pub fn new(atom_1: (AtomPointer, &Point3), vertex: (AtomPointer, &Point3), atom_2: (AtomPointer, &Point3)) -> Self {
+impl<'a> BondAngle<'a> {
+    pub fn new(
+        atom_1: (AtomPointer<'a>, &Point3),
+        vertex: (AtomPointer<'a>, &Point3),
+        atom_2: (AtomPointer<'a>, &Point3),
+    ) -> Self {
         let (atom_1, atom_1_position) = atom_1;
         let (vertex, vertex_position) = vertex;
         let (atom_2, atom_2_position) = atom_2;
@@ -24,7 +28,7 @@ impl BondAngle {
         }
     }
 
-    pub fn atoms(&self) -> (&AtomPointer, &AtomPointer, &AtomPointer) {
+    pub fn atoms(&self) -> (&AtomPointer<'_>, &AtomPointer<'_>, &AtomPointer<'_>) {
         (&self.atom_1, &self.vertex, &self.atom_2)
     }
 }

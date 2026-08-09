@@ -1,16 +1,13 @@
-#[derive(Debug, Clone, Copy)]
-pub struct AtomPointer {
-    pub ensemble_id: usize,
-    pub conformer_id: usize,
+use crate::conformer::Conformer;
+
+#[derive(Debug, Copy, Clone)]
+pub struct AtomPointer<'a> {
+    pub conformer: &'a Conformer<'a>,
     pub index: usize,
 }
 
-impl AtomPointer {
-    pub fn new(ensemble_id: usize, conformer_id: usize, index: usize) -> Self {
-        Self {
-            ensemble_id,
-            conformer_id,
-            index,
-        }
+impl<'a> AtomPointer<'a> {
+    pub fn new(conformer: &'a Conformer, index: usize) -> Self {
+        Self { conformer, index }
     }
 }

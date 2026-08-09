@@ -1,14 +1,14 @@
 use crate::atom_pointer::AtomPointer;
 
 #[derive(Debug)]
-pub struct Contact {
-    pub atom_1: AtomPointer,
-    pub atom_2: AtomPointer,
+pub struct Contact<'a> {
+    pub atom_1: AtomPointer<'a>,
+    pub atom_2: AtomPointer<'a>,
     pub distance: f64,
 }
 
-impl Contact {
-    pub fn new(atom_1: AtomPointer, atom_2: AtomPointer, distance: f64) -> Self {
+impl<'a> Contact<'a> {
+    pub fn new(atom_1: AtomPointer<'a>, atom_2: AtomPointer<'a>, distance: f64) -> Self {
         Self {
             atom_1,
             atom_2,

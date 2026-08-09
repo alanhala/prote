@@ -1,18 +1,18 @@
-use crate::geometry::Point3;
+use crate::{frame::Frame, topology::Topology};
 
 #[derive(Debug)]
-pub struct Conformer {
-    pub positions: Vec<Point3>,
-    pub occupancies: Vec<f32>,
-    pub b_factors: Vec<f32>,
+pub struct Conformer<'a> {
+    pub topology: &'a Topology,
+    pub frame: &'a Frame,
 }
 
-impl Conformer {
-    pub fn new(positions: Vec<Point3>, occupancies: Vec<f32>, b_factors: Vec<f32>) -> Self {
-        Self {
-            positions,
-            occupancies,
-            b_factors,
-        }
+impl<'a> PartialEq for Conformer<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.topology == other.topology && self.frame == other.frame
+    }
+}
+impl<'a> Conformer<'a> {
+    pub fn new(topology: &'a Topology, frame: &'a Frame) -> Self {
+        Conformer { topology, frame }
     }
 }

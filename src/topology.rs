@@ -1,22 +1,27 @@
-use crate::atom::Atom;
-use crate::residue::Residue;
+use crate::{atom::Atom, component::Component};
 
 #[derive(Debug)]
 pub struct Topology {
-    pub name: String,
+    pub id: usize,
     pub atoms: Vec<Atom>,
-    pub residues: Vec<Residue>,
+    pub components: Vec<Component>,
+}
+
+impl PartialEq for Topology {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
 }
 
 impl Topology {
-    pub fn new(name: String, atoms: Vec<Atom>, residues: Vec<Residue>) -> Self {
-        Self { name, atoms, residues }
+    pub fn new(id: usize, atoms: Vec<Atom>, components: Vec<Component>) -> Self {
+        Self { id, atoms, components }
     }
 
-    pub fn residue_index_for(&self, atom_index: usize) -> usize {
-        self.residues
+    pub fn component_index_for(&self, atom_index: usize) -> usize {
+        self.components
             .iter()
-            .position(|residue| residue.atom_range.contains(&atom_index))
-            .expect("every atom belongs to a residue")
+            .position(|component| component.atom_range.contains(&atom_index))
+            .expect("every atom belongs to a component")
     }
 }

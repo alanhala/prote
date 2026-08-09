@@ -1,4 +1,4 @@
-use crate::topology::Topology;
+use crate::bond::Bond;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BondOrder {
@@ -11,7 +11,7 @@ pub enum BondOrder {
 }
 
 pub trait BondOrderSource {
-    fn bond_order(&self, topology: &Topology, atom_1: usize, atom_2: usize) -> Option<BondOrder>;
+    fn bond_order(&self, bond: &Bond) -> Option<BondOrder>;
 }
 
 impl BondOrder {

@@ -3,11 +3,13 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::atom::{Atom, Element};
+use crate::bond::Bond;
 use crate::bond_order::{BondOrder, BondOrderSource};
-use crate::conformer::Conformer;
-use crate::ensemble::Ensemble;
+use crate::component::Component;
+use crate::frame::Frame;
 use crate::geometry::Point3;
-use crate::residue::Residue;
+use crate::molecule::Molecule;
+use crate::protein::Protein;
 use crate::topology::Topology;
 use crate::{Cif, Row, Value};
 
@@ -114,14 +116,6 @@ fn element(v: &Value) -> Option<Element> {
     Element::from_symbol(&normalized)
 }
 
-fn is_hetero(v: &Value) -> Option<bool> {
-    match v.as_str()? {
-        "ATOM" => Some(false),
-        "HETATM" => Some(true),
-        _ => None,
-    }
-}
-
 #[derive(Debug)]
 pub struct AtomSite {
     pub id: u32,
@@ -137,13 +131,16 @@ pub struct AtomSite {
     pub pdbx_ins_code: Option<String>,
     pub label_comp_id: String,
     pub type_symbol: Element,
-    pub is_hetero: bool,
     pub x: f64,
     pub y: f64,
     pub z: f64,
     pub occupancy: f32,
     pub b_factor: f32,
 }
+
+// (alt_id -> (positions, occupancies, b_factors)) accumulated per altloc while walking one
+// struct_asym's atom_site rows; collapsed into `Vec<Frame>` once the walk is done.
+type FrameBuildData = HashMap<Option<String>, (Vec<Point3>, Vec<f32>, Vec<f32>)>;
 
 #[derive(Debug)]
 pub struct ChemCompBond {
@@ -160,24 +157,22 @@ pub struct MmCIF {
 }
 
 impl BondOrderSource for MmCIF {
-    fn bond_order(&self, topology: &Topology, atom_1: usize, atom_2: usize) -> Option<BondOrder> {
-        let res_1 = topology.residue_index_for(atom_1);
-        let res_2 = topology.residue_index_for(atom_2);
-        let atom_1 = &topology.atoms[atom_1];
-        let atom_2 = &topology.atoms[atom_2];
-        if res_1 == res_2 {
-            let res = &topology.residues[res_1];
-            match self.chem_comp_bonds_lookup(&res.name, &atom_1.name, &atom_2.name) {
-                None => None,
-                // TODO: this ignores `chem_comp_bond.aromatic_flag` — a ring bond currently
-                // resolves to whatever Kekulé value_order (Single/Double) the dictionary
-                // happens to record, never `BondOrder::Aromatic`. If `aromatic_flag` is true,
-                // return `Some(BondOrder::Aromatic)` instead of `value_order`.
-                Some(chem_comp_bond) => Some(chem_comp_bond.value_order),
-            }
-        } else {
-            None
+    fn bond_order(&self, bond: &Bond) -> Option<BondOrder> {
+        let topology = bond.atom_1.conformer.topology;
+        let component_1 = topology.component_index_for(bond.atom_1.index);
+        let component_2 = topology.component_index_for(bond.atom_2.index);
+        if component_1 != component_2 {
+            return None;
         }
+        let component = &topology.components[component_1];
+        let atom_1 = &topology.atoms[bond.atom_1.index];
+        let atom_2 = &topology.atoms[bond.atom_2.index];
+        // TODO: this ignores `chem_comp_bond.aromatic_flag` — a ring bond currently resolves to
+        // whatever Kekulé value_order (Single/Double) the dictionary happens to record, never
+        // `BondOrder::Aromatic`. If `aromatic_flag` is true, use `BondOrder::Aromatic` instead of
+        // `value_order`.
+        self.chem_comp_bonds_lookup(&component.name, &atom_1.name, &atom_2.name)
+            .map(|chem_comp_bond| chem_comp_bond.value_order)
     }
 }
 
@@ -217,7 +212,6 @@ impl MmCIF {
                     optional_field(&row, "_atom_site.pdbx_PDB_ins_code", Value::as_str)?.map(str::to_string);
                 let label_comp_id = field(&row, "_atom_site.label_comp_id", Value::as_str)?.to_string();
                 let type_symbol = field(&row, "_atom_site.type_symbol", element)?;
-                let is_hetero_atom = field(&row, "_atom_site.group_PDB", is_hetero)?;
                 let x = field(&row, "_atom_site.Cartn_x", Value::as_float)?;
                 let y = field(&row, "_atom_site.Cartn_y", Value::as_float)?;
                 let z = field(&row, "_atom_site.Cartn_z", Value::as_float)?;
@@ -233,7 +227,6 @@ impl MmCIF {
                     pdbx_ins_code,
                     label_comp_id,
                     type_symbol,
-                    is_hetero: is_hetero_atom,
                     x,
                     y,
                     z,
@@ -269,89 +262,125 @@ impl MmCIF {
         })
     }
 
-    // TODO: return Result<Vec<Molecule>, MmCifError> instead of unwrapping —
-    // a struct_asym with no matching entity_id or no atom_site rows is a
-    // malformed-file problem, not an invariant of this program, same as the
-    // field-level errors in `new`.
-    pub fn build_ensembles(&self) -> Vec<Ensemble> {
-        let mut ensembles: Vec<Ensemble> = vec![];
+    // TODO: return Result<Vec<Protein>, MmCifError> / Result<Vec<Molecule>, MmCifError> instead of
+    // unwrapping — a struct_asym with no matching entity_id or no atom_site rows is a
+    // malformed-file problem, not an invariant of this program, same as the field-level errors in
+    // `new`.
+    pub fn build_proteins(&self) -> Vec<Protein> {
+        let mut proteins = vec![];
         for struct_asym in self.struct_asym() {
             let entity = self.entity(struct_asym.entity_id).unwrap();
-            let mut conformers: HashMap<Option<String>, (Vec<Point3>, Vec<f32>, Vec<f32>)> = HashMap::new();
-            conformers.insert(None, (vec![], vec![], vec![]));
-            let mut residues: Vec<Residue> = vec![];
-            let mut atoms: Vec<Atom> = vec![];
-            let atom_sites = self.atom_sites(&struct_asym.id).unwrap();
-            let mut residue_start = 0;
-            // (auth_seq_id, pdbx_ins_code, label_atom_id) is the real atom identity. auth_seq_id
-            // alone collides for inserted residues (e.g. 3PTB chain A: TYR 184 and GLY 184A both
-            // have an atom named "N"), and label_alt_id must be ignored here since alt records
-            // are the *same* atom, not different ones.
-            let mut seen_atoms: HashSet<(i64, Option<String>, String)> = HashSet::new();
-            for (i, atom_site) in atom_sites.iter().enumerate() {
-                let identity = (
-                    atom_site.auth_seq_id,
-                    atom_site.pdbx_ins_code.clone(),
-                    atom_site.label_atom_id.clone(),
-                );
-                if seen_atoms.insert(identity) {
-                    atoms.push(Atom::new(atom_site.type_symbol, atom_site.label_atom_id.clone()));
-                }
-                match &atom_site.label_alt_id {
-                    None => {
-                        for (_, conformer) in conformers.iter_mut() {
-                            conformer.0.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
-                            conformer.1.push(atom_site.occupancy);
-                            conformer.2.push(atom_site.b_factor);
-                        }
-                    }
-                    alt_id => match conformers.get_mut(&alt_id) {
-                        None => {
-                            let template = conformers.get(&None).unwrap();
-                            let mut new_positions = template.0.clone();
-                            new_positions.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
-                            let mut new_occupancies = template.1.clone();
-                            new_occupancies.push(atom_site.occupancy);
-                            let mut new_b_factors = template.2.clone();
-                            new_b_factors.push(atom_site.b_factor);
-                            conformers.insert(alt_id.clone(), (new_positions, new_occupancies, new_b_factors));
-                        }
-                        Some(conformer) => {
-                            conformer.0.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
-                            conformer.1.push(atom_site.occupancy);
-                            conformer.2.push(atom_site.b_factor);
-                        }
-                    },
-                }
-
-                let build_resiude = i + 1 == atom_sites.len()
-                    || atom_sites[i + 1].auth_seq_id != atom_site.auth_seq_id
-                    || atom_sites[i + 1].pdbx_ins_code != atom_site.pdbx_ins_code;
-                if build_resiude {
-                    residues.push(Residue::new(
-                        atom_site.label_comp_id.clone(),
-                        Range {
-                            start: residue_start,
-                            end: atoms.len(), // end is exclusive
-                        },
-                        atom_sites[i].is_hetero,
-                    ));
-                    residue_start = atoms.len();
-                }
+            if !matches!(entity.kind, EntityKind::Polymer) {
+                continue;
             }
-            let keep_none = conformers.len() == 1;
-            let conformers: Vec<Conformer> = conformers
-                .into_iter()
-                .filter(|c| c.0.is_some() || keep_none)
-                .map(|conformer| {
-                    assert!(conformer.1 .0.len() == atoms.len());
-                    Conformer::new(conformer.1 .0, conformer.1 .1, conformer.1 .2)
-                })
-                .collect();
-            let topology = Topology::new(entity.name.clone(), atoms, residues);
-            ensembles.push(Ensemble::new(ensembles.len(), topology, conformers));
+            let (name, topology, frames, residue_numbers) =
+                self.build_topology_frames_components(struct_asym, entity, proteins.len());
+            proteins.push(Protein::new(name, topology, frames, residue_numbers));
         }
-        ensembles
+        proteins
+    }
+
+    pub fn build_molecules(&self) -> Vec<Molecule> {
+        let mut molecules = vec![];
+        for struct_asym in self.struct_asym() {
+            let entity = self.entity(struct_asym.entity_id).unwrap();
+            if matches!(entity.kind, EntityKind::Polymer) {
+                continue;
+            }
+            let (name, topology, frames, _residue_numbers) =
+                self.build_topology_frames_components(struct_asym, entity, molecules.len());
+            molecules.push(Molecule::new(molecules.len(), name, topology, frames));
+        }
+        molecules
+    }
+
+    /// Shared by `build_proteins`/`build_molecules`: turns one `struct_asym`'s atom_site rows into
+    /// a `Topology` (atoms + `Component`s — one `Component` per distinct `(auth_seq_id,
+    /// pdbx_ins_code)`, always at least one, even for a single-component ligand), one `Frame` per
+    /// distinct `label_alt_id` (or a single frame if there are no altlocs), and the residue/
+    /// nucleotide numbers parallel to `Topology.components` (unused by `build_molecules` today,
+    /// but cheap to compute once here rather than duplicating this whole loop per caller).
+    fn build_topology_frames_components(
+        &self,
+        struct_asym: &StructAsym,
+        entity: &Entity,
+        topology_id: usize,
+    ) -> (String, Topology, Vec<Frame>, Vec<i64>) {
+        let mut frame_data: FrameBuildData = HashMap::new();
+        frame_data.insert(None, (vec![], vec![], vec![]));
+        let mut components: Vec<Component> = vec![];
+        let mut numbers: Vec<i64> = vec![];
+        let mut atoms: Vec<Atom> = vec![];
+        let atom_sites = self.atom_sites(&struct_asym.id).unwrap();
+        let mut component_start = 0;
+        // (auth_seq_id, pdbx_ins_code, label_atom_id) is the real atom identity. auth_seq_id
+        // alone collides for inserted residues (e.g. 3PTB chain A: TYR 184 and GLY 184A both
+        // have an atom named "N"), and label_alt_id must be ignored here since alt records
+        // are the *same* atom, not different ones.
+        let mut seen_atoms: HashSet<(i64, Option<String>, String)> = HashSet::new();
+        for (i, atom_site) in atom_sites.iter().enumerate() {
+            let identity = (
+                atom_site.auth_seq_id,
+                atom_site.pdbx_ins_code.clone(),
+                atom_site.label_atom_id.clone(),
+            );
+            if seen_atoms.insert(identity) {
+                atoms.push(Atom::new(atom_site.type_symbol, atom_site.label_atom_id.clone()));
+            }
+            match &atom_site.label_alt_id {
+                None => {
+                    for (_, frame) in frame_data.iter_mut() {
+                        frame.0.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
+                        frame.1.push(atom_site.occupancy);
+                        frame.2.push(atom_site.b_factor);
+                    }
+                }
+                alt_id => match frame_data.get_mut(alt_id) {
+                    None => {
+                        let template = frame_data.get(&None).unwrap();
+                        let mut new_positions = template.0.clone();
+                        new_positions.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
+                        let mut new_occupancies = template.1.clone();
+                        new_occupancies.push(atom_site.occupancy);
+                        let mut new_b_factors = template.2.clone();
+                        new_b_factors.push(atom_site.b_factor);
+                        frame_data.insert(alt_id.clone(), (new_positions, new_occupancies, new_b_factors));
+                    }
+                    Some(frame) => {
+                        frame.0.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
+                        frame.1.push(atom_site.occupancy);
+                        frame.2.push(atom_site.b_factor);
+                    }
+                },
+            }
+
+            let build_component = i + 1 == atom_sites.len()
+                || atom_sites[i + 1].auth_seq_id != atom_site.auth_seq_id
+                || atom_sites[i + 1].pdbx_ins_code != atom_site.pdbx_ins_code;
+            if build_component {
+                components.push(Component::new(
+                    atom_site.label_comp_id.clone(),
+                    Range {
+                        start: component_start,
+                        end: atoms.len(), // end is exclusive
+                    },
+                ));
+                numbers.push(atom_site.auth_seq_id);
+                component_start = atoms.len();
+            }
+        }
+        let keep_none = frame_data.len() == 1;
+        let frames: Vec<Frame> = frame_data
+            .into_iter()
+            .filter(|(alt_id, _)| alt_id.is_some() || keep_none)
+            .enumerate()
+            .map(|(frame_id, (_, (positions, occupancies, b_factors)))| {
+                assert!(positions.len() == atoms.len());
+                Frame::new(frame_id, positions, occupancies, b_factors)
+            })
+            .collect();
+        let topology = Topology::new(topology_id, atoms, components);
+        (entity.name.clone(), topology, frames, numbers)
     }
 
     pub fn entities(&self) -> impl Iterator<Item = &Entity> {

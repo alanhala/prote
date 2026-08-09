@@ -1,14 +1,14 @@
 use crate::{atom_pointer::AtomPointer, bond_order::BondOrder};
 
 #[derive(Debug)]
-pub struct Bond {
-    pub atom_1: AtomPointer,
-    pub atom_2: AtomPointer,
+pub struct Bond<'a> {
+    pub atom_1: AtomPointer<'a>,
+    pub atom_2: AtomPointer<'a>,
     pub order: Option<BondOrder>,
 }
 
-impl Bond {
-    pub fn new(atom_1: AtomPointer, atom_2: AtomPointer) -> Self {
+impl<'a> Bond<'a> {
+    pub fn new(atom_1: AtomPointer<'a>, atom_2: AtomPointer<'a>) -> Self {
         Self {
             atom_1,
             atom_2,
