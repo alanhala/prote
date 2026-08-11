@@ -15,8 +15,6 @@ impl Atom {
         self.element
     }
 
-    // Thin delegators: the data belongs to the element, but it's handy to
-    // ask an atom directly. Each just forwards to `Element`.
     pub fn symbol(&self) -> &'static str {
         self.element.symbol()
     }

@@ -11,6 +11,9 @@ impl<'a> PartialEq for Conformer<'a> {
         self.topology == other.topology && self.frame == other.frame
     }
 }
+
+impl<'a> Eq for Conformer<'a> {}
+
 impl<'a> Conformer<'a> {
     pub fn new(topology: &'a Topology, frame: &'a Frame) -> Self {
         Conformer { topology, frame }

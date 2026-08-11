@@ -17,7 +17,7 @@ impl Proximity {
         }
     }
 
-    pub fn search_radius(&self, atom: &Atom) -> f64 {
+    pub fn search_radius(self, atom: &Atom) -> f64 {
         match self {
             Self::Bonded => atom.covalent_radius() + 3.0,
             Self::InContact => atom.van_der_waals_radius() + 3.0,

@@ -3,7 +3,7 @@ use crate::{conformer::Conformer, frame::Frame, topology::Topology};
 #[derive(Debug)]
 pub struct Protein {
     pub name: String,
-    topology: Topology,
+    pub topology: Topology,
     frames: Vec<Frame>,
     residue_numbers: Vec<i64>,
 }

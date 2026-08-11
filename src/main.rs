@@ -1,6 +1,12 @@
 use std::fs;
 
-use prote::{bond_graph::BondGraph, mmcif::MmCIF, spatial_index::SpatialIndex, Cif};
+use prote::{
+    atom::Atom,
+    bond_graph::{self, BondGraph, Hybridization},
+    mmcif::MmCIF,
+    spatial_index::SpatialIndex,
+    Cif,
+};
 
 fn main() {
     let cif = Cif::new(&fs::read_to_string("./cifs/3PTB.cif").unwrap());
@@ -17,5 +23,10 @@ fn main() {
     let protein_conformer = protein.conformer(0).unwrap();
     let spatial_index = SpatialIndex::new(&protein_conformer.frame.positions);
     let bond_graph = BondGraph::new(&protein_conformer, &spatial_index, &protein_conformer);
-    println!("{:?}", bond_graph)
+    for (i, atom) in protein.topology.atoms.iter().enumerate() {
+        match bond_graph.hybridization_at(i) {
+            Some(Hybridization::SP2) => println!("Found SP2 {:?}", atom.name),
+            _ => {}
+        }
+    }
 }

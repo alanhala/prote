@@ -1,4 +1,4 @@
-use crate::bond::Bond;
+use crate::{bond::Bond, conformer::Conformer};
 
 #[derive(Debug, Clone, Copy)]
 pub enum BondOrder {
@@ -11,7 +11,7 @@ pub enum BondOrder {
 }
 
 pub trait BondOrderSource {
-    fn bond_order(&self, bond: &Bond) -> Option<BondOrder>;
+    fn bond_order(&self, bond: &Bond, conformers: &[&Conformer]) -> Option<BondOrder>;
 }
 
 impl BondOrder {

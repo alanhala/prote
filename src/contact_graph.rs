@@ -5,55 +5,57 @@ use crate::{
 
 #[derive(Debug)]
 pub struct ContactGraph<'a> {
-    contacts: Vec<Vec<Contact<'a>>>,
+    pub conformers: Vec<&'a Conformer<'a>>,
+    contacts: Vec<Vec<Contact>>,
 }
 
 impl<'a> ContactGraph<'a> {
     pub fn new(search: &'a Conformer, spatial_index: &SpatialIndex, query: &'a Conformer) -> Self {
-        let mut contacts: Vec<Vec<Contact>> = (0..search.topology.atoms.len()).map(|_| Vec::new()).collect();
+        let search_offset = 0;
+        let query_offset = if search == query {
+            0
+        } else {
+            search.topology.atoms.len()
+        };
+        let conformers = vec![search, query];
+        let atoms = query_offset + query.topology.atoms.len();
+        let mut contacts = (0..atoms).map(|_| Vec::new()).collect::<Vec<Vec<Contact>>>();
         for (query_atom_index, query_atom) in query.topology.atoms.iter().enumerate() {
-            let position = &query.frame.positions[query_atom_index];
-            let hits = spatial_index.candidates_within(
+            let candidates = spatial_index.candidates_within(
                 &search.frame.positions,
-                position,
-                Proximity::search_radius(&Proximity::InContact, query_atom),
-                |search_atom_index, distance| {
-                    let same_atom = search == query && query_atom_index == search_atom_index;
-                    let search_atom = &search.topology.atoms[search_atom_index];
-                    !same_atom && Proximity::classify(query_atom, search_atom, distance) == Some(Proximity::InContact)
-                },
+                &query.frame.positions[query_atom_index],
+                Proximity::search_radius(Proximity::InContact, &query_atom),
             );
-            for (neighbor_atom_index, distance) in hits {
-                let search_pointer = AtomPointer::new(search, neighbor_atom_index);
-                let query_pointer = AtomPointer::new(query, query_atom_index);
-                contacts[neighbor_atom_index].push(Contact::new(search_pointer, query_pointer, distance));
+            for (search_atom_index, distance) in candidates {
+                let query_atom_pointer = AtomPointer::new(1, query_offset, query_atom_index);
+                let search_atom = &search.topology.atoms[search_atom_index];
+                let search_atom_pointer = AtomPointer::new(0, search_offset, search_atom_index);
+                let different_atoms = search_atom_pointer != query_atom_pointer;
+                let bonded = Proximity::classify(&search_atom, &query_atom, distance) == Some(Proximity::InContact);
+                if different_atoms && bonded {
+                    if !contacts[search_atom_pointer.index()]
+                        .iter()
+                        .any(|b| b.atom_2 == query_atom_pointer)
+                    {
+                        contacts[search_atom_pointer.index()].push(Contact::new(
+                            search_atom_pointer,
+                            query_atom_pointer,
+                            distance,
+                        ));
+                    }
+                    if !contacts[query_atom_pointer.index()]
+                        .iter()
+                        .any(|b| b.atom_2 == search_atom_pointer)
+                    {
+                        contacts[query_atom_pointer.index()].push(Contact::new(
+                            query_atom_pointer,
+                            search_atom_pointer,
+                            distance,
+                        ));
+                    }
+                }
             }
         }
-        Self { contacts }
-    }
-
-    pub fn new_intramolecular(conformer: &'a Conformer, spatial_index: &SpatialIndex) -> Self {
-        let topology = conformer.topology;
-        let atoms = &topology.atoms;
-        let positions = &conformer.frame.positions;
-        let mut contacts: Vec<Vec<Contact>> = (0..atoms.len()).map(|_| Vec::new()).collect();
-        for (query_atom_index, query_atom) in atoms.iter().enumerate() {
-            let hits = spatial_index.candidates_within(
-                positions,
-                &positions[query_atom_index],
-                Proximity::search_radius(&Proximity::InContact, query_atom),
-                |search_atom_index, distance| {
-                    let same_atom = query_atom_index == search_atom_index;
-                    let search_atom = &conformer.topology.atoms[search_atom_index];
-                    !same_atom && Proximity::classify(query_atom, search_atom, distance) == Some(Proximity::InContact)
-                },
-            );
-            for (neighbor_atom_index, distance) in hits {
-                let search_pointer = AtomPointer::new(conformer, neighbor_atom_index);
-                let query_pointer = AtomPointer::new(conformer, query_atom_index);
-                contacts[neighbor_atom_index].push(Contact::new(search_pointer, query_pointer, distance));
-            }
-        }
-        Self { contacts }
+        Self { conformers, contacts }
     }
 }

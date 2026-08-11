@@ -20,23 +20,13 @@ impl SpatialIndex {
         }
     }
 
-    pub fn candidates_within<F>(
-        &self,
-        positions: &[Point3],
-        center: &Point3,
-        half_size: f64,
-        mut candidate_check: F,
-    ) -> Vec<(usize, f64)>
-    where
-        F: FnMut(usize, f64) -> bool,
-    {
+    pub fn candidates_within(&self, positions: &[Point3], center: &Point3, half_size: f64) -> Vec<(usize, f64)> {
         let min = [center.x - half_size, center.y - half_size, center.z - half_size];
         let max = [center.x + half_size, center.y + half_size, center.z + half_size];
         self.tree
             .search(positions, min, max)
             .into_iter()
             .map(|id| (id, positions[id].distance(center)))
-            .filter(|&(id, distance)| candidate_check(id, distance))
             .collect()
     }
 }

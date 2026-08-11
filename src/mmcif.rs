@@ -6,6 +6,7 @@ use crate::atom::{Atom, Element};
 use crate::bond::Bond;
 use crate::bond_order::{BondOrder, BondOrderSource};
 use crate::component::Component;
+use crate::conformer::Conformer;
 use crate::frame::Frame;
 use crate::geometry::Point3;
 use crate::molecule::Molecule;
@@ -157,22 +158,27 @@ pub struct MmCIF {
 }
 
 impl BondOrderSource for MmCIF {
-    fn bond_order(&self, bond: &Bond) -> Option<BondOrder> {
-        let topology = bond.atom_1.conformer.topology;
-        let component_1 = topology.component_index_for(bond.atom_1.index);
-        let component_2 = topology.component_index_for(bond.atom_2.index);
-        if component_1 != component_2 {
-            return None;
+    fn bond_order(&self, bond: &Bond, conformers: &[&Conformer]) -> Option<BondOrder> {
+        if bond.atom_1.conformer_index != bond.atom_2.conformer_index {
+            None
+        } else {
+            let topology = conformers[bond.atom_1.conformer_index].topology;
+            let component_1 = topology.component_index_for(bond.atom_1.atom_index);
+            let component_2 = topology.component_index_for(bond.atom_2.atom_index);
+            if component_1 != component_2 {
+                None
+            } else {
+                let component = &topology.components[component_1];
+                let atom_1 = &topology.atoms[bond.atom_1.atom_index];
+                let atom_2 = &topology.atoms[bond.atom_2.atom_index];
+                // TODO: this ignores `chem_comp_bond.aromatic_flag` — a ring bond currently resolves to
+                // whatever Kekulé value_order (Single/Double) the dictionary happens to record, never
+                // `BondOrder::Aromatic`. If `aromatic_flag` is true, use `BondOrder::Aromatic` instead of
+                // `value_order`.
+                self.chem_comp_bonds_lookup(&component.name, &atom_1.name, &atom_2.name)
+                    .map(|chem_comp_bond| chem_comp_bond.value_order)
+            }
         }
-        let component = &topology.components[component_1];
-        let atom_1 = &topology.atoms[bond.atom_1.index];
-        let atom_2 = &topology.atoms[bond.atom_2.index];
-        // TODO: this ignores `chem_comp_bond.aromatic_flag` — a ring bond currently resolves to
-        // whatever Kekulé value_order (Single/Double) the dictionary happens to record, never
-        // `BondOrder::Aromatic`. If `aromatic_flag` is true, use `BondOrder::Aromatic` instead of
-        // `value_order`.
-        self.chem_comp_bonds_lookup(&component.name, &atom_1.name, &atom_2.name)
-            .map(|chem_comp_bond| chem_comp_bond.value_order)
     }
 }
 
