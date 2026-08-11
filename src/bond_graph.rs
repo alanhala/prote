@@ -1,12 +1,10 @@
-use std::vec;
-
 use crate::{
-    atom_pointer::AtomPointer,
     bond::Bond,
     bond_angle::BondAngle,
-    bond_order::{BondOrder, BondOrderSource},
+    bond_order::BondOrderSource,
     conformer::Conformer,
     proximity::Proximity,
+    proximity_graph::ProximityGraph,
     spatial_index::SpatialIndex,
 };
 
@@ -47,66 +45,24 @@ pub struct BondGraph<'a> {
 
 impl<'a> BondGraph<'a> {
     pub fn new(search: &'a Conformer, spatial_index: &SpatialIndex, query: &'a Conformer) -> Self {
-        let same_conformer = search == query;
-        let query_conformer_index = if same_conformer { 0 } else { 1 };
-        let conformers = if same_conformer {
-            vec![search]
-        } else {
-            vec![search, query]
-        };
-        let query_offset = if same_conformer { 0 } else { search.topology.atoms.len() };
-        let atoms = if same_conformer {
-            search.topology.atoms.len()
-        } else {
-            search.topology.atoms.len() + query.topology.atoms.len()
-        };
-        let mut bonds = (0..atoms).map(|_| Vec::new()).collect::<Vec<Vec<Bond>>>();
-        let mut angles = (0..atoms).map(|_| Vec::new()).collect::<Vec<Vec<BondAngle>>>();
-        for (query_atom_index, query_atom) in query.topology.atoms.iter().enumerate() {
-            let candidates = spatial_index.candidates_within(
-                &search.frame.positions,
-                &query.frame.positions[query_atom_index],
-                Proximity::search_radius(Proximity::Bonded, &query_atom),
-            );
-            for (search_atom_index, distance) in candidates {
-                let query_atom_pointer = AtomPointer::new(query_conformer_index, query_offset, query_atom_index);
-                let search_atom = &search.topology.atoms[search_atom_index];
-                let search_atom_pointer = AtomPointer::new(0, 0, search_atom_index);
-                let different_atoms = search_atom_pointer != query_atom_pointer;
-                let bonded = Proximity::classify(&search_atom, &query_atom, distance) == Some(Proximity::Bonded);
-                if different_atoms && bonded {
-                    if !bonds[search_atom_pointer.index()]
-                        .iter()
-                        .any(|b| b.atom_2 == query_atom_pointer)
-                    {
-                        bonds[search_atom_pointer.index()].push(Bond::new(
-                            search_atom_pointer,
-                            query_atom_pointer,
-                            distance,
-                        ));
-                    }
-                    if !bonds[query_atom_pointer.index()]
-                        .iter()
-                        .any(|b| b.atom_2 == search_atom_pointer)
-                    {
-                        bonds[query_atom_pointer.index()].push(Bond::new(
-                            query_atom_pointer,
-                            search_atom_pointer,
-                            distance,
-                        ));
-                    }
-                }
-            }
-        }
+        let proximity_graph = ProximityGraph::new(search, spatial_index, query, Proximity::Bonded);
+        let conformers = proximity_graph.conformers;
+        let bonds: Vec<Vec<Bond>> = proximity_graph
+            .edges
+            .into_iter()
+            .map(|edges| {
+                edges
+                    .into_iter()
+                    .map(|(atom_1, atom_2, distance)| Bond::new(atom_1, atom_2, distance))
+                    .collect()
+            })
+            .collect();
+        let mut angles = (0..bonds.len()).map(|_| Vec::new()).collect::<Vec<Vec<BondAngle>>>();
         for (atom_index, atom_bonds) in bonds.iter().enumerate() {
             match atom_bonds.len() {
                 0 | 1 => {}
                 bonds_len => {
-                    let vertex_atom_pointer = AtomPointer::new(
-                        atom_bonds[0].atom_1.conformer_index,
-                        atom_bonds[0].atom_1.conformer_offset,
-                        atom_bonds[0].atom_1.atom_index,
-                    );
+                    let vertex_atom_pointer = atom_bonds[0].atom_1;
                     let vertex_position = &conformers[vertex_atom_pointer.conformer_index].frame.positions
                         [vertex_atom_pointer.atom_index];
                     for i in 0..(bonds_len - 1) {

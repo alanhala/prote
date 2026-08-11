@@ -16,6 +16,7 @@ pub mod mmcif;
 pub mod molecule;
 pub mod protein;
 pub mod proximity;
+pub mod proximity_graph;
 pub mod spatial_index;
 pub mod topology;
 pub use cif::*;

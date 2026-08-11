@@ -1,6 +1,6 @@
 use crate::atom::Atom;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Proximity {
     Bonded,
     InContact,
