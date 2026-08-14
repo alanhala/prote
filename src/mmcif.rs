@@ -402,7 +402,9 @@ impl MmCIF {
     }
 
     pub fn struct_asym(&self) -> impl Iterator<Item = &StructAsym> {
-        self.struct_asyms.values()
+        let mut asyms: Vec<&StructAsym> = self.struct_asyms.values().collect();
+        asyms.sort_by(|a, b| a.id.cmp(&b.id));
+        asyms.into_iter()
     }
 
     fn chem_comp_bonds_lookup(&self, comp_id: &str, atom_1: &str, atom_2: &str) -> Option<&ChemCompBond> {
