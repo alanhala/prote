@@ -13,7 +13,7 @@ pub struct Ring {
 
 impl Ring {
     pub fn new(atom_pointers: Vec<AtomPointer>, conformers: &[&Conformer]) -> Option<Self> {
-        if !(5..=8).contains(&atom_pointers.len()) {
+        if !(5..20).contains(&atom_pointers.len()) {
             return None;
         }
         let positions: Vec<Point3> = atom_pointers

@@ -24,5 +24,13 @@ fn main() {
     let protein_conformer = protein.conformer(0).unwrap();
     let spatial_index = SpatialIndex::new(&protein_conformer.frame.positions);
     let bond_graph = BondGraph::new(&protein_conformer, &spatial_index, &protein_conformer);
-    // bond_graph.rings();
+    println!("{:?}", bond_graph.to_dot());
+    // for ring_pointers in bond_graph.atom_rings.get(1561) {
+    //     for ring_pointer in ring_pointers {
+    //         println!("{:?}", bond_graph.rings.get(*ring_pointer).unwrap().atom_pointers.len());
+    //         for atom_pointer in &bond_graph.rings.get(*ring_pointer).unwrap().atom_pointers {
+    //             println!("{:?}", atom_pointer.index());
+    //         }
+    //     }
+    // }
 }
