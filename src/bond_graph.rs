@@ -1,8 +1,14 @@
-use std::{iter::Cycle, vec};
-
 use crate::{
-    bond::Bond, bond_angle::BondAngle, bond_order::BondOrderSource, conformer::Conformer, proximity::Proximity,
-    proximity_graph::ProximityGraph, spatial_index::SpatialIndex,
+    atom_pointer::AtomPointer,
+    bond::Bond,
+    bond_angle::BondAngle,
+    bond_order::BondOrderSource,
+    conformer::{self, Conformer},
+    geometry::Point3,
+    proximity::Proximity,
+    proximity_graph::ProximityGraph,
+    ring::Ring,
+    spatial_index::SpatialIndex,
 };
 
 const ANGLE_TOLERANCE: f64 = 5.0;
@@ -38,6 +44,8 @@ pub struct BondGraph<'a> {
     pub conformers: Vec<&'a Conformer<'a>>,
     pub bonds: Vec<Vec<Bond>>,
     pub angles: Vec<Vec<BondAngle>>,
+    pub rings: Vec<Ring>,
+    pub atom_rings: Vec<Vec<usize>>,
 }
 
 impl<'a> BondGraph<'a> {
@@ -80,15 +88,22 @@ impl<'a> BondGraph<'a> {
                 }
             }
         }
+        let (rings, atom_rings) = Self::find_rings(&bonds, &conformers);
         Self {
             conformers,
             bonds,
             angles,
+            rings,
+            atom_rings,
         }
     }
 
     pub fn hybridization_at(&self, atom_index: usize) -> Option<Hybridization> {
+        if self.atom_rings[atom_index].iter().any(|&ring_index| self.rings[ring_index].coplanar) {
+            return Some(Hybridization::SP2);
+        }
         let atom_angles = self.angles.get(atom_index)?;
+
         match atom_angles.as_slice() {
             [a] => match categorize_angle(a.value) {
                 AngleShape::Linear => Some(Hybridization::SP),
@@ -134,61 +149,81 @@ impl<'a> BondGraph<'a> {
         }
     }
 
-    pub fn dfs(&self) {
-        let mut visited = vec![false; self.bonds.len()];
-        let mut on_path = vec![false; self.bonds.len()];
-        let mut cycles: Vec<Vec<usize>> = vec![];
+    // TODO: This DFS-based cycle basis is *a* valid cycle basis, but for graphs where three or
+    // more rings are all fused together sharing multiple edges (e.g. steroid ring systems,
+    // porphyrins/heme), it isn't guaranteed to match the SSSR (smallest set of smallest rings)
+    // a chemist would draw. Fine for standard amino acid side chains (at most 2 fused rings),
+    // revisit if this ever runs against ligands/cofactors with more complex fused ring systems.
+    // To research if/when this needs fixing: "minimum cycle basis" (MCB) is the graph-theory
+    // name for the general problem; Horton's algorithm (1987) is the classic polynomial-time
+    // solution, later improved on by de Pina's algorithm. Figueras' 1996 ring-perception paper
+    // (breadth-first search based) is the more chemistry-specific version that OpenBabel/RDKit's
+    // SSSR implementations descend from. RING 4.0 covers this in the specific context of
+    // protein/ligand ring perception.
+    fn find_rings(bonds: &[Vec<Bond>], conformers: &[&Conformer]) -> (Vec<Ring>, Vec<Vec<usize>>) {
+        let mut visited = vec![false; bonds.len()];
+        let mut on_path = vec![false; bonds.len()];
+        let mut rings: Vec<Ring> = vec![];
+        let mut atom_rings = (0..bonds.len()).map(|_| Vec::new()).collect::<Vec<Vec<usize>>>();
         let mut path: Vec<usize> = vec![];
-        for i in 0..self.bonds.len() {
-            if !visited[i] && self.hybridization_at(i) == Some(Hybridization::SP2) {
-                self.visit(i, None, &mut visited, &mut path, &mut on_path, &mut cycles);
+        for i in 0..bonds.len() {
+            if !visited[i] {
+                Self::visit(
+                    bonds,
+                    conformers,
+                    i,
+                    None,
+                    &mut visited,
+                    &mut path,
+                    &mut on_path,
+                    &mut rings,
+                    &mut atom_rings,
+                );
             }
         }
-        println!("{:?}", cycles)
+        (rings, atom_rings)
     }
 
     fn visit(
-        &self,
+        bonds: &[Vec<Bond>],
+        conformers: &[&Conformer],
         node: usize,
         parent: Option<usize>,
         visited: &mut Vec<bool>,
         path: &mut Vec<usize>,
         on_path: &mut Vec<bool>,
-        cycles: &mut Vec<Vec<usize>>,
+        rings: &mut Vec<Ring>,
+        atom_rings: &mut Vec<Vec<usize>>,
     ) {
         visited[node] = true;
-        for bond in &self.bonds[node] {
+        for bond in &bonds[node] {
             let neighbor = bond.atom_2.index();
-            if !visited[neighbor] && self.hybridization_at(neighbor) == Some(Hybridization::SP2) {
+            if !visited[neighbor] {
                 path.push(node);
                 on_path[node] = true;
-                self.visit(neighbor, Some(node), visited, path, on_path, cycles);
+                Self::visit(bonds, conformers, neighbor, Some(node), visited, path, on_path, rings, atom_rings);
                 path.pop();
                 on_path[node] = false;
             } else if parent == Some(neighbor) {
                 continue;
             } else if on_path[neighbor] {
                 let idx = path.iter().position(|&x| x == neighbor).unwrap();
-                let mut cycle = path[idx..].to_vec();
-                cycle.push(node);
-                cycles.push(cycle);
+                let atoms: Vec<AtomPointer> = path[idx..]
+                    .iter()
+                    .chain(std::iter::once(&node))
+                    .map(|&n| bonds[n][0].atom_1)
+                    .collect();
+                if let Some(ring) = Ring::new(atoms, conformers) {
+                    let ring_index = rings.len();
+                    for atom_pointer in &ring.atom_pointers {
+                        atom_rings[atom_pointer.index()].push(ring_index);
+                    }
+                    rings.push(ring);
+                };
             }
         }
     }
 
-    pub fn to_dot(&self) -> String {
-        let mut out = String::from("graph G {\n");
-        for (i, bonds) in self.bonds.iter().enumerate() {
-            for bond in bonds {
-                let j = bond.atom_2.index();
-                if i < j {
-                    out += &format!("  {i} -- {j};\n");
-                }
-            }
-        }
-        out += "}\n";
-        out
-    }
     // fn leftover_capacity(atom: &Atom, bonds: &[Bond]) -> Option<u8> {
     //     let used: u8 = bonds.iter().filter_map(|bond| bond.order).map(BondOrder::as_u8).sum();
     //     atom.typical_valence().map(|typical| typical.saturating_sub(used))
