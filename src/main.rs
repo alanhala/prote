@@ -29,4 +29,29 @@ fn main() {
             _ => {}
         }
     }
+    bond_graph.dfs();
 }
+
+// fn visit(node: usize, neighbors: &Vec<Vec<usize>>, visited: &mut Vec<usize>, cycles: &mut Vec<Vec<usize>>) {
+//     for &neighbor in &neighbors[node] {
+//         if visited.last() == Some(&neighbor) {
+//             continue;
+//         } else if let Some(idx) = visited.iter().position(|&x| x == neighbor) {
+//             let mut cycle = visited[idx..].to_vec();
+//             cycle.push(node);
+//             cycles.push(cycle);
+//         } else {
+//             visited.push(node);
+//             visit(neighbor, neighbors, visited, cycles);
+//             visited.pop();
+//         }
+//     }
+// }
+
+// fn main() {
+//     let neighbors = vec![vec![1, 2], vec![0, 2], vec![0, 1]];
+//     let mut visited = vec![];
+//     let mut cycles: Vec<Vec<usize>> = vec![];
+//     visit(0, &neighbors, &mut visited, &mut cycles);
+//     println!("finished: {} cycles found", cycles.len());
+// }

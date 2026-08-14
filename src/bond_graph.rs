@@ -1,11 +1,8 @@
+use std::{iter::Cycle, vec};
+
 use crate::{
-    bond::Bond,
-    bond_angle::BondAngle,
-    bond_order::BondOrderSource,
-    conformer::Conformer,
-    proximity::Proximity,
-    proximity_graph::ProximityGraph,
-    spatial_index::SpatialIndex,
+    bond::Bond, bond_angle::BondAngle, bond_order::BondOrderSource, conformer::Conformer, proximity::Proximity,
+    proximity_graph::ProximityGraph, spatial_index::SpatialIndex,
 };
 
 const ANGLE_TOLERANCE: f64 = 5.0;
@@ -137,6 +134,61 @@ impl<'a> BondGraph<'a> {
         }
     }
 
+    pub fn dfs(&self) {
+        let mut visited = vec![false; self.bonds.len()];
+        let mut on_path = vec![false; self.bonds.len()];
+        let mut cycles: Vec<Vec<usize>> = vec![];
+        let mut path: Vec<usize> = vec![];
+        for i in 0..self.bonds.len() {
+            if !visited[i] && self.hybridization_at(i) == Some(Hybridization::SP2) {
+                self.visit(i, None, &mut visited, &mut path, &mut on_path, &mut cycles);
+            }
+        }
+        println!("{:?}", cycles)
+    }
+
+    fn visit(
+        &self,
+        node: usize,
+        parent: Option<usize>,
+        visited: &mut Vec<bool>,
+        path: &mut Vec<usize>,
+        on_path: &mut Vec<bool>,
+        cycles: &mut Vec<Vec<usize>>,
+    ) {
+        visited[node] = true;
+        for bond in &self.bonds[node] {
+            let neighbor = bond.atom_2.index();
+            if !visited[neighbor] && self.hybridization_at(neighbor) == Some(Hybridization::SP2) {
+                path.push(node);
+                on_path[node] = true;
+                self.visit(neighbor, Some(node), visited, path, on_path, cycles);
+                path.pop();
+                on_path[node] = false;
+            } else if parent == Some(neighbor) {
+                continue;
+            } else if on_path[neighbor] {
+                let idx = path.iter().position(|&x| x == neighbor).unwrap();
+                let mut cycle = path[idx..].to_vec();
+                cycle.push(node);
+                cycles.push(cycle);
+            }
+        }
+    }
+
+    pub fn to_dot(&self) -> String {
+        let mut out = String::from("graph G {\n");
+        for (i, bonds) in self.bonds.iter().enumerate() {
+            for bond in bonds {
+                let j = bond.atom_2.index();
+                if i < j {
+                    out += &format!("  {i} -- {j};\n");
+                }
+            }
+        }
+        out += "}\n";
+        out
+    }
     // fn leftover_capacity(atom: &Atom, bonds: &[Bond]) -> Option<u8> {
     //     let used: u8 = bonds.iter().filter_map(|bond| bond.order).map(BondOrder::as_u8).sum();
     //     atom.typical_valence().map(|typical| typical.saturating_sub(used))
