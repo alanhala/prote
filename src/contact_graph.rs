@@ -1,9 +1,12 @@
-use crate::{conformer::Conformer, contact::Contact, proximity::Proximity, proximity_graph::ProximityGraph, spatial_index::SpatialIndex};
+use crate::{
+    conformer::Conformer, contact::Contact, proximity::Proximity, proximity_graph::ProximityGraph,
+    spatial_index::SpatialIndex,
+};
 
 #[derive(Debug)]
 pub struct ContactGraph<'a> {
     pub conformers: Vec<&'a Conformer<'a>>,
-    contacts: Vec<Vec<Contact>>,
+    pub contacts: Vec<Vec<Contact>>,
 }
 
 impl<'a> ContactGraph<'a> {
