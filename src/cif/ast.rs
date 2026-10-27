@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 #[derive(Debug)]
 pub struct Cif {
     pub blocks: Vec<DataBlock>,
@@ -16,7 +18,7 @@ pub enum Member {
     SaveFrame(SaveFrame),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Integer { value: i64, su: Option<u64> },
     Float { value: f64, su: Option<u64> },
@@ -25,7 +27,7 @@ pub enum Value {
     Unknown,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Loop {
     pub tags: Vec<String>,
     pub rows: Vec<Vec<Value>>,
@@ -57,6 +59,30 @@ impl Cif {
 }
 
 impl DataBlock {
+    // A category's rows in either form the file can use: a `loop_`, or `_category.tag value` pairs,
+    // which mmCIF writes when a category has a single row. Pairs are rebuilt as a one-row loop, and
+    // a missing category is an empty one. Only the rebuilt loop is owned, so real loops (e.g.
+    // `_atom_site`) aren't copied.
+    pub fn category(&self, category: &str) -> Cow<'_, Loop> {
+        if let Some(l) = self.loop_by_category(category) {
+            return Cow::Borrowed(l);
+        }
+        let (tags, values): (Vec<String>, Vec<Value>) = self
+            .items
+            .iter()
+            .filter_map(|m| match m {
+                Member::Item { tag, value }
+                    if tag.split('.').next().is_some_and(|c| c.eq_ignore_ascii_case(category)) =>
+                {
+                    Some((tag.clone(), value.clone()))
+                }
+                _ => None,
+            })
+            .unzip();
+        let rows = if tags.is_empty() { vec![] } else { vec![values] };
+        Cow::Owned(Loop { tags, rows })
+    }
+
     pub fn loop_by_category(&self, category: &str) -> Option<&Loop> {
         self.items.iter().find_map(|m| match m {
             Member::Loop(l) if l.category().is_some_and(|c| c.eq_ignore_ascii_case(category)) => Some(l),
@@ -237,6 +263,37 @@ mod tests {
         let block = cif.block("x").unwrap();
         assert!(block.loop_by_category("_ATOM_SITE").is_some());
         assert!(block.loop_by_category("_not_a_category").is_none());
+    }
+
+    #[test]
+    fn category_reads_a_loop() {
+        let cif = atom_site_block();
+        let block = cif.block("x").unwrap();
+        let ys: Vec<f64> = block
+            .category("_atom_site")
+            .iter()
+            .map(|row| row.get("_atom_site.Cartn_y").unwrap().as_float().unwrap())
+            .collect();
+        assert_eq!(ys, vec![2.0, 4.0]);
+    }
+
+    #[test]
+    fn category_reads_tag_value_pairs_as_one_row() {
+        let cif = Cif::new("data_x\n_entity.id 1\n_entity.type polymer\n_other.id 2");
+        let block = cif.block("x").unwrap();
+        let entity = block.category("_ENTITY");
+        let rows: Vec<Row> = entity.iter().collect();
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0].get("_entity.id"), Some(Value::Integer { value: 1, .. })));
+        assert_eq!(rows[0].get("_entity.type").unwrap().as_str(), Some("polymer"));
+        assert!(rows[0].get("_other.id").is_none());
+    }
+
+    #[test]
+    fn category_is_empty_when_missing() {
+        let cif = atom_site_block();
+        let block = cif.block("x").unwrap();
+        assert_eq!(block.category("_entity").iter().count(), 0);
     }
 
     #[test]
