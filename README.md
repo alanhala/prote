@@ -8,6 +8,7 @@ prote aims to be the Rust tool for working with proteins. One project you can re
 
 - Its own mmCIF lexer, parser, and typed category layer, not a wrapper around an existing library.
 - Geometric bond perception from raw coordinates. It does not depend on a file declaring its own bonds.
+- Bond orders (single, double, triple, aromatic) from geometry alone: bond angles give each atom's hybridization, ring coplanarity and bond lengths give aromaticity, and the remaining double bonds are placed by a valence-constrained matching over bond lengths.
 - A generic KD-tree for spatial queries.
 - Bond angles.
 - Lennard-Jones interaction energy between two molecules.
@@ -36,9 +37,9 @@ The domain model is deliberately decoupled from mmCIF. A `Topology` (atoms, bond
 
 ## Status
 
-Working: mmCIF parsing, bond and angle perception, spatial indexing, Lennard-Jones interaction energy.
+Working: mmCIF parsing, bond, angle, ring and bond-order perception, spatial indexing, Lennard-Jones interaction energy.
 
-Not yet built: bond order, partial charges, electrostatics, torsion angles, non-covalent contact detection.
+Not yet built: partial charges, formal charges, electrostatics, torsion angles.
 
 ## Building
 
