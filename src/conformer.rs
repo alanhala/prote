@@ -1,21 +1,38 @@
-use crate::{frame::Frame, topology::Topology};
+use crate::{frame::Frame, structure::Structure};
+
+#[derive(Clone, Copy)]
+pub struct Conformer<'a> {
+    structure: &'a Structure,
+    frame: &'a Frame,
+}
 
 #[derive(Debug)]
-pub struct Conformer<'a> {
-    pub topology: &'a Topology,
-    pub frame: &'a Frame,
+pub struct FrameMismatch {
+    pub atoms: usize,
+    pub positions: usize,
+    pub occupancies: usize,
+    pub b_factors: usize,
 }
-
-impl<'a> PartialEq for Conformer<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        self.topology == other.topology && self.frame == other.frame
-    }
-}
-
-impl<'a> Eq for Conformer<'a> {}
 
 impl<'a> Conformer<'a> {
-    pub fn new(topology: &'a Topology, frame: &'a Frame) -> Self {
-        Conformer { topology, frame }
+    pub fn new(structure: &'a Structure, frame: &'a Frame) -> Result<Self, FrameMismatch> {
+        let atoms = structure.atoms.len();
+        if frame.positions.len() != atoms || frame.occupancies.len() != atoms || frame.b_factors.len() != atoms {
+            return Err(FrameMismatch {
+                atoms,
+                positions: frame.positions.len(),
+                occupancies: frame.occupancies.len(),
+                b_factors: frame.b_factors.len(),
+            });
+        }
+        Ok(Self { structure, frame })
+    }
+
+    pub fn structure(&self) -> &'a Structure {
+        self.structure
+    }
+
+    pub fn frame(&self) -> &'a Frame {
+        self.frame
     }
 }

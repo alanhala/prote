@@ -1,68 +1,9 @@
-use std::fmt;
-
-#[derive(Debug, Clone)]
-pub struct Atom {
-    pub element: Element,
-    pub name: String,
-}
-
-impl Atom {
-    pub fn new(element: Element, name: String) -> Self {
-        Atom { element, name }
-    }
-
-    pub fn element(&self) -> Element {
-        self.element
-    }
-
-    pub fn symbol(&self) -> &'static str {
-        self.element.symbol()
-    }
-
-    pub fn atomic_number(&self) -> u8 {
-        self.element.atomic_number()
-    }
-
-    pub fn weight(&self) -> f64 {
-        self.element.weight()
-    }
-
-    pub fn covalent_radius(&self) -> f64 {
-        self.element.covalent_radius()
-    }
-
-    pub fn van_der_waals_radius(&self) -> f64 {
-        self.element.van_der_waals_radius()
-    }
-
-    pub fn lennard_jones(&self) -> Option<LennardJones> {
-        self.element.lennard_jones()
-    }
-
-    pub fn typical_valence(&self) -> Option<u8> {
-        self.element().typical_valence()
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct Properties {
     pub symbol: &'static str,
     pub name: &'static str,
     pub weight: f64,
     pub covalent_radius: f64,
-}
-
-/// Generic, per-element (not per-atom-type) Lennard-Jones parameters, in
-/// Ångström and kcal/mol. Derived from AMBER parm99's generic nonbonded
-/// atom types (CT, N, O, S, P, F, Cl, Br) via σ = 2·R*/2^(1/6), where R*
-/// (Rmin/2) is AMBER's native parameter. Collapsing to one row per element
-/// hides real per-atom-type variation AMBER tracks (e.g. carbonyl vs.
-/// hydroxyl vs. ether oxygen) — fine for a coarse walking-skeleton energy
-/// estimate, not for atom-type-specific force-field work.
-#[derive(Clone, Copy, Debug)]
-pub struct LennardJones {
-    pub sigma: f64,
-    pub epsilon: f64,
 }
 
 #[repr(u8)]
@@ -336,84 +277,6 @@ impl Element {
             | Element::Lv
             | Element::Ts
             | Element::Og => panic!("no van der Waals radius data for this element"),
-        }
-    }
-
-    /// Generic Lennard-Jones σ/ε for this element, or `None` if this table
-    /// doesn't cover it. See `LennardJones` for the source and caveats.
-    pub const fn lennard_jones(self) -> Option<LennardJones> {
-        match self {
-            Element::H => Some(LennardJones {
-                sigma: 1.069,
-                epsilon: 0.0157,
-            }),
-            Element::C => Some(LennardJones {
-                sigma: 3.400,
-                epsilon: 0.1094,
-            }),
-            Element::N => Some(LennardJones {
-                sigma: 3.250,
-                epsilon: 0.1700,
-            }),
-            Element::O => Some(LennardJones {
-                sigma: 2.960,
-                epsilon: 0.2100,
-            }),
-            Element::S => Some(LennardJones {
-                sigma: 3.564,
-                epsilon: 0.2500,
-            }),
-            Element::P => Some(LennardJones {
-                sigma: 3.742,
-                epsilon: 0.2000,
-            }),
-            Element::F => Some(LennardJones {
-                sigma: 3.118,
-                epsilon: 0.0610,
-            }),
-            Element::Cl => Some(LennardJones {
-                sigma: 3.471,
-                epsilon: 0.2650,
-            }),
-            Element::Br => Some(LennardJones {
-                sigma: 3.956,
-                epsilon: 0.3200,
-            }),
-            _ => None,
-        }
-    }
-
-    pub const fn valence_electrons(self) -> Option<u8> {
-        match self {
-            // Group 1
-            Element::H | Element::Li | Element::Na | Element::K | Element::Rb | Element::Cs | Element::Fr => Some(1),
-            // Group 2
-            Element::Be | Element::Mg | Element::Ca | Element::Sr | Element::Ba | Element::Ra => Some(2),
-            // Group 13
-            Element::B | Element::Al | Element::Ga | Element::In | Element::Tl | Element::Nh => Some(3),
-            // Group 14
-            Element::C | Element::Si | Element::Ge | Element::Sn | Element::Pb | Element::Fl => Some(4),
-            // Group 15
-            Element::N | Element::P | Element::As | Element::Sb | Element::Bi | Element::Mc => Some(5),
-            // Group 16
-            Element::O | Element::S | Element::Se | Element::Te | Element::Po | Element::Lv => Some(6),
-            // Group 17 (halogens)
-            Element::F | Element::Cl | Element::Br | Element::I | Element::At | Element::Ts => Some(7),
-            // Group 18 (noble gases) — He is the one exception: a full 1s shell is 2
-            // electrons, not 8, since there's no 2s/2p to fill at that shell.
-            Element::He => Some(2),
-            Element::Ne | Element::Ar | Element::Kr | Element::Xe | Element::Rn | Element::Og => Some(8),
-            _ => None,
-        }
-    }
-
-    pub const fn typical_valence(self) -> Option<u8> {
-        match self {
-            Element::H => Some(1),
-            _ => match self.valence_electrons() {
-                Some(v) if v >= 4 => Some(8 - v),
-                _ => None,
-            },
         }
     }
 
@@ -1255,12 +1118,6 @@ impl Element {
     }
 }
 
-impl fmt::Display for Element {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.symbol())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1288,15 +1145,6 @@ mod tests {
         assert_eq!(Element::from_symbol("Ca"), Some(Element::Ca));
         assert_eq!(Element::from_symbol("Og"), Some(Element::Og));
         assert_eq!(Element::from_symbol("Xx"), None);
-    }
-
-    #[test]
-    fn atom_delegates_to_element() {
-        let atom = Atom::new(Element::C, "C".to_string());
-        assert_eq!(atom.symbol(), "C");
-        assert_eq!(atom.atomic_number(), 6);
-        assert_eq!(atom.covalent_radius(), 0.76);
-        assert_eq!(atom.van_der_waals_radius(), 1.77);
     }
 
     #[test]
