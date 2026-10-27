@@ -1,6 +1,6 @@
 use crate::{bond::Bond, conformer::Conformer};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BondOrder {
     Single,
     Double,
