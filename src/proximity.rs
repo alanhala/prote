@@ -1,4 +1,4 @@
-use crate::atom::Atom;
+use crate::structure::Atom;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Proximity {
@@ -23,19 +23,22 @@ impl Proximity {
         // surfacing it as a distinct "Suspect" case rather than silently dropping
         // it, since a hard `None` here loses the information that something was
         // close enough to be worth a second look.
-        if distance > 0.8 && distance <= atom_1.covalent_radius() + atom_2.covalent_radius() + 0.4 {
-            Some(Self::Bonded)
-        } else if distance <= atom_1.van_der_waals_radius() + atom_2.van_der_waals_radius() {
-            Some(Self::InContact)
-        } else {
-            None
-        }
+
+        // if distance > 0.8 && distance <= atom_1.covalent_radius() + atom_2.covalent_radius() + 0.4 {
+        //     Some(Self::Bonded)
+        // } else if distance <= atom_1.van_der_waals_radius() + atom_2.van_der_waals_radius() {
+        //     Some(Self::InContact)
+        // } else {
+        //     None
+        // }
+        todo!()
     }
 
     pub fn search_radius(self, atom: &Atom) -> f64 {
-        match self {
-            Self::Bonded => atom.covalent_radius() + 3.0,
-            Self::InContact => atom.van_der_waals_radius() + 3.0,
-        }
+        todo!()
+        // match self {
+        //     Self::Bonded => atom.covalent_radius() + 3.0,
+        //     Self::InContact => atom.van_der_waals_radius() + 3.0,
+        // }
     }
 }
