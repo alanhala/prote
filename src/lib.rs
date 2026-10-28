@@ -11,7 +11,6 @@ pub mod frame;
 pub mod geometry;
 pub mod kdtree;
 pub mod mmcif;
-pub mod proximity;
 pub mod proximity_graph;
 pub mod proximity_graph_old;
 pub mod ring;
