@@ -21,6 +21,9 @@ pub struct Atom {
 pub struct Residue {
     pub name: String,
     pub number: i64,
+    // Position in the entity's sequence (`label_seq_id`), counting residues missing from the model,
+    // so a gap between neighbours is a chain break. None for non-polymers.
+    pub seq_id: Option<i64>,
     pub atoms: Range<usize>,
 }
 

@@ -151,6 +151,7 @@ pub struct InstanceRows {
 #[derive(Debug)]
 pub struct ResidueRows {
     pub name: String,
+    pub seq_id: Option<i64>,
     pub atoms: OrderedMap<String, Vec<AtomSite>>,
 }
 
@@ -181,6 +182,7 @@ impl MmCIF {
             let pdbx_ins_code = optional_field(&row, "_atom_site.pdbx_PDB_ins_code", code)?;
             let label_comp_id = field(&row, "_atom_site.label_comp_id", string)?;
             let label_atom_id = field(&row, "_atom_site.label_atom_id", string)?;
+            let label_seq_id = optional_field(&row, "_atom_site.label_seq_id", Value::as_int)?;
             let atom_site = AtomSite {
                 type_symbol: field(&row, "_atom_site.type_symbol", element)?,
                 label_alt_id: optional_field(&row, "_atom_site.label_alt_id", string)?,
@@ -200,7 +202,7 @@ impl MmCIF {
             });
             let residue = instance
                 .residues
-                .get_or_insert_with((auth_seq_id, pdbx_ins_code), || ResidueRows { name: label_comp_id.clone(), atoms: OrderedMap::new() });
+                .get_or_insert_with((auth_seq_id, pdbx_ins_code), || ResidueRows { name: label_comp_id.clone(), seq_id: label_seq_id, atoms: OrderedMap::new() });
             // Microheterogeneity: altlocs can model two residue types at one position (e.g.
             // PRO/SER). Their atoms differ, not just their positions, so frames can't represent
             // both; keep the first.
@@ -243,7 +245,7 @@ impl MmCIF {
                         bonds.push(Bond::new(atom_start + atom_1, atom_start + atom_2));
                     }
                 }
-                residues.push(Residue { name: residue.name.clone(), number: *number, atoms: atom_start..atoms.len() });
+                residues.push(Residue { name: residue.name.clone(), number: *number, seq_id: residue.seq_id, atoms: atom_start..atoms.len() });
             }
             instances.push(EntityInstance { id: id.clone(), chain: instance.chain.clone(), entity, residues: residue_start..residues.len() });
         }
