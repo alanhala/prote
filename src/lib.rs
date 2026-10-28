@@ -17,4 +17,5 @@ pub mod proximity_graph_old;
 pub mod ring;
 pub mod spatial_index;
 pub use cif::*;
+pub mod selection;
 pub mod structure;

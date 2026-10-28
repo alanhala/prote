@@ -1,6 +1,9 @@
 use std::ops::Range;
 
-use crate::element::Element;
+use crate::{
+    element::Element,
+    selection::{self, Selection},
+};
 
 #[derive(Debug)]
 pub struct Structure {
