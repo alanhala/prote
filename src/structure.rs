@@ -1,9 +1,6 @@
 use std::ops::Range;
 
-use crate::{
-    element::Element,
-    selection::{self, Selection},
-};
+use crate::{bond::Bond, element::Element};
 
 #[derive(Debug)]
 pub struct Structure {
@@ -11,6 +8,7 @@ pub struct Structure {
     pub residues: Vec<Residue>,
     pub instances: Vec<EntityInstance>,
     pub entities: Vec<Entity>,
+    pub bonds: Vec<Bond>,
 }
 
 #[derive(Debug)]

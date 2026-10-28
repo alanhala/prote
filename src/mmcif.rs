@@ -1,6 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
+use std::vec;
 
+use crate::bond::Bond;
 use crate::bond_order::BondOrder;
 use crate::element::Element;
 use crate::frame::Frame;
@@ -18,10 +20,7 @@ pub struct OrderedMap<K, V> {
 
 impl<K: Eq + Hash + Clone, V> OrderedMap<K, V> {
     pub fn new() -> Self {
-        Self {
-            indices: HashMap::new(),
-            entries: vec![],
-        }
+        Self { indices: HashMap::new(), entries: vec![] }
     }
 
     pub fn get_or_insert_with(&mut self, key: K, value: impl FnOnce() -> V) -> &mut V {
@@ -64,11 +63,7 @@ fn field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<
 /// Like `field`, but a CIF `.`/`?` (inapplicable/unknown) is `Ok(None)` rather than
 /// an error — e.g. `_struct_conn` partner seq_id, which is inapplicable for
 /// non-polymer partners (a bound ion has no sequence position).
-fn optional_field<'a, T>(
-    row: &Row<'a>,
-    tag: &'static str,
-    cast: fn(&'a Value) -> Option<T>,
-) -> Result<Option<T>, MmCifError> {
+fn optional_field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<T>) -> Result<Option<T>, MmCifError> {
     match row.get(tag) {
         None => Err(MmCifError::MissingField(tag)),
         Some(Value::Inapplicable) | Some(Value::Unknown) => Ok(None),
@@ -127,6 +122,8 @@ fn element(v: &Value) -> Option<Element> {
 
 #[derive(Debug)]
 pub struct ChemCompBond {
+    pub atom_1: String,
+    pub atom_2: String,
     pub value_order: BondOrder,
     pub aromatic_flag: bool,
 }
@@ -161,7 +158,7 @@ pub struct ResidueRows {
 pub struct MmCIF {
     pub entities: OrderedMap<u8, Entity>,
     pub instances: OrderedMap<String, InstanceRows>,
-    pub chem_comp_bonds: HashMap<(String, String, String), ChemCompBond>,
+    pub chem_comp_bonds: HashMap<String, Vec<ChemCompBond>>,
 }
 
 impl MmCIF {
@@ -171,10 +168,7 @@ impl MmCIF {
         let mut entities = OrderedMap::new();
         for row in block.category("_entity").iter() {
             let id = field(&row, "_entity.id", Value::as_int)? as u8;
-            let entity = Entity {
-                kind: field(&row, "_entity.type", entity_kind)?,
-                name: field(&row, "_entity.pdbx_description", string)?,
-            };
+            let entity = Entity { kind: field(&row, "_entity.type", entity_kind)?, name: field(&row, "_entity.pdbx_description", string)? };
             entities.get_or_insert_with(id, || entity);
         }
 
@@ -206,10 +200,7 @@ impl MmCIF {
             });
             let residue = instance
                 .residues
-                .get_or_insert_with((auth_seq_id, pdbx_ins_code), || ResidueRows {
-                    name: label_comp_id.clone(),
-                    atoms: OrderedMap::new(),
-                });
+                .get_or_insert_with((auth_seq_id, pdbx_ins_code), || ResidueRows { name: label_comp_id.clone(), atoms: OrderedMap::new() });
             // Microheterogeneity: altlocs can model two residue types at one position (e.g.
             // PRO/SER). Their atoms differ, not just their positions, so frames can't represent
             // both; keep the first.
@@ -219,25 +210,17 @@ impl MmCIF {
             residue.atoms.get_or_insert_with(label_atom_id, Vec::new).push(atom_site);
         }
 
-        let mut chem_comp_bonds = HashMap::new();
+        let mut chem_comp_bonds: HashMap<String, Vec<ChemCompBond>> = HashMap::new();
         for row in block.category("_chem_comp_bond").iter() {
-            let key = (
-                field(&row, "_chem_comp_bond.comp_id", string)?,
-                field(&row, "_chem_comp_bond.atom_id_1", string)?,
-                field(&row, "_chem_comp_bond.atom_id_2", string)?,
-            );
-            let bond = ChemCompBond {
+            chem_comp_bonds.entry(field(&row, "_chem_comp_bond.comp_id", string)?).or_default().push(ChemCompBond {
+                atom_1: field(&row, "_chem_comp_bond.atom_id_1", string)?,
+                atom_2: field(&row, "_chem_comp_bond.atom_id_2", string)?,
                 value_order: field(&row, "_chem_comp_bond.value_order", bond_order)?,
                 aromatic_flag: field(&row, "_chem_comp_bond.pdbx_aromatic_flag", flag)?,
-            };
-            chem_comp_bonds.insert(key, bond);
+            });
         }
 
-        Ok(Self {
-            entities,
-            instances,
-            chem_comp_bonds,
-        })
+        Ok(Self { entities, instances, chem_comp_bonds })
     }
 
     pub fn build_structure(&self) -> Result<(Structure, Vec<Frame>), MmCifError> {
@@ -245,42 +228,27 @@ impl MmCIF {
         let mut residues: Vec<Residue> = vec![];
         let mut instances: Vec<EntityInstance> = vec![];
         let mut atom_rows: Vec<&[AtomSite]> = vec![];
+        let mut bonds: Vec<Bond> = vec![];
         for (id, instance) in self.instances.iter() {
-            let entity = self
-                .entities
-                .index_of(&instance.entity_id)
-                .ok_or(MmCifError::UnknownEntity(instance.entity_id))?;
+            let entity = self.entities.index_of(&instance.entity_id).ok_or(MmCifError::UnknownEntity(instance.entity_id))?;
             let residue_start = residues.len();
             for ((number, _), residue) in instance.residues.iter() {
                 let atom_start = atoms.len();
                 for (name, rows) in residue.atoms.iter() {
-                    atoms.push(Atom {
-                        element: rows[0].type_symbol,
-                        name: name.clone(),
-                    });
+                    atoms.push(Atom { element: rows[0].type_symbol, name: name.clone() });
                     atom_rows.push(rows);
                 }
-                residues.push(Residue {
-                    name: residue.name.clone(),
-                    number: *number,
-                    atoms: atom_start..atoms.len(),
-                });
+                for template in self.chem_comp_bonds.get(&residue.name).into_iter().flatten() {
+                    if let (Some(atom_1), Some(atom_2)) = (residue.atoms.index_of(&template.atom_1), residue.atoms.index_of(&template.atom_2)) {
+                        bonds.push(Bond::new(atom_start + atom_1, atom_start + atom_2));
+                    }
+                }
+                residues.push(Residue { name: residue.name.clone(), number: *number, atoms: atom_start..atoms.len() });
             }
-            instances.push(EntityInstance {
-                id: id.clone(),
-                chain: instance.chain.clone(),
-                entity,
-                residues: residue_start..residues.len(),
-            });
+            instances.push(EntityInstance { id: id.clone(), chain: instance.chain.clone(), entity, residues: residue_start..residues.len() });
         }
         let frames = build_frames(&atom_rows)?;
-        let structure = Structure {
-            atoms,
-            residues,
-            instances,
-            // Same order as `self.entities`, so `index_of` above gives indices into this.
-            entities: self.entities.values().cloned().collect(),
-        };
+        let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonds };
         Ok((structure, frames))
     }
 }
@@ -292,11 +260,7 @@ fn build_frames(atom_rows: &[&[AtomSite]]) -> Result<Vec<Frame>, MmCifError> {
     let all_rows = || atom_rows.iter().flat_map(|rows| rows.iter());
     let models: BTreeSet<i64> = all_rows().map(|atom_site| atom_site.model).collect();
     let alt_ids: BTreeSet<&str> = all_rows().filter_map(|atom_site| atom_site.label_alt_id.as_deref()).collect();
-    let alt_ids: Vec<Option<&str>> = if alt_ids.is_empty() {
-        vec![None]
-    } else {
-        alt_ids.into_iter().map(Some).collect()
-    };
+    let alt_ids: Vec<Option<&str>> = if alt_ids.is_empty() { vec![None] } else { alt_ids.into_iter().map(Some).collect() };
     let mut frames = vec![];
     for &model in &models {
         for &alt_id in &alt_ids {
