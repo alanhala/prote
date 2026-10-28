@@ -70,4 +70,16 @@ impl Selection {
         let atoms = self.atoms.iter().map(|atom| !atom).collect();
         Selection { atoms }
     }
+
+    pub fn indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.atoms
+            .iter()
+            .enumerate()
+            .filter(|(_, &selected)| selected)
+            .map(|(atom, _)| atom)
+    }
+
+    pub fn contains(&self, atom: usize) -> bool {
+        self.atoms[atom]
+    }
 }
