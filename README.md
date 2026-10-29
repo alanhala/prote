@@ -2,51 +2,45 @@
 
 [![Rust](https://github.com/alanhala/prote/actions/workflows/rust.yml/badge.svg)](https://github.com/alanhala/prote/actions/workflows/rust.yml)
 
-prote aims to be the Rust tool for working with proteins. One project you can reach for whatever protein analysis you need, instead of a different library for each piece.
+A Rust library for protein structure analysis.
 
-## What it does today
+## What it does
 
-- Its own mmCIF lexer, parser, and typed category layer, not a wrapper around an existing library.
-- Geometric bond perception from raw coordinates. It does not depend on a file declaring its own bonds.
-- Bond orders (single, double, triple, aromatic) from geometry alone: bond angles give each atom's hybridization, ring coplanarity and bond lengths give aromaticity, and the remaining double bonds are placed by a valence-constrained matching over bond lengths.
-- A generic KD-tree for spatial queries.
-- Bond angles.
-- Lennard-Jones interaction energy between two molecules.
-
-The whole project is built on the Rust standard library. No runtime dependencies.
+- Parses mmCIF with its own lexer and parser.
+- Builds a flat `Structure` (atoms, residues, entity instances, entities, bonds) and one `Frame` of positions per model and altloc.
+- Bonds come from the file's `_chem_comp_bond` templates, plus backbone links between consecutive polymer residues (C–N for peptides, O3'–P for nucleic acids).
+- Atom selections by instance, residue or atom.
+- Spatial queries over a frame with a KD-tree.
+- Contacts between two selections, excluding atoms within three bonds of each other.
 
 ## Example
 
 ```rust
 use std::fs;
-use prote::{mmcif::MmCIF, Cif};
+use prote::{contact::Contact, mmcif::MmCIF, selection::Selection, spatial_index::SpatialIndex, structure::EntityKind, Cif};
 
-let cif_file = fs::read_to_string("some_structure.cif").unwrap();
-let cif = Cif::new(&cif_file);
-let mmcif = MmCIF::new(cif).unwrap();
-let ensembles = mmcif.build_ensembles();
+let mmcif = MmCIF::new(Cif::new(&fs::read_to_string("3PTB.cif").unwrap())).unwrap();
+let (structure, frames) = mmcif.build_structure().unwrap();
+let index = SpatialIndex::new(&frames[0].positions);
 
-for ensemble in &ensembles {
-    println!("{}: {} atoms", ensemble.topology.name, ensemble.topology.atoms.len());
+let protein = Selection::by_instance(&structure, |_, entity| matches!(entity.kind, EntityKind::Polymer(_)));
+let ligand = Selection::by_residue(&structure, |residue| residue.name == "BEN");
+
+for contact in Contact::contacts(&structure, &index, &ligand, &protein) {
+    let residue = &structure.residues[structure.residue_of(contact.atom_2)];
+    println!("{} {} {:.2} Å", residue.name, residue.number, contact.distance);
 }
 ```
 
-## Design
+`examples/export_dot.rs` writes Graphviz files of a structure's bonds and contacts.
 
-The domain model is deliberately decoupled from mmCIF. A `Topology` (atoms, bonds, residues) describes chemical identity, and a `Conformer` (positions, occupancy, B-factor) describes one spatial snapshot of it. A `Molecule` pairs the two. This split exists so the same topology can be shared across many conformers: NMR ensembles, MD trajectory frames, and crystallographic alternate locations are all the same underlying idea, just with more or fewer snapshots.
+## Not yet
 
-## Status
-
-Working: mmCIF parsing, bond, angle, ring and bond-order perception, spatial indexing, Lennard-Jones interaction energy.
-
-Not yet built: partial charges, formal charges, electrostatics, torsion angles.
-
-## Building
-
-```
-cargo build
-```
+- Disulfides and other links from `_struct_conn`.
+- Interaction types (H-bonds, salt bridges, metal coordination, hydrophobic, π-stacking).
+- Rings.
+- Structures whose file has no `_chem_comp_bond` (needs the Chemical Component Dictionary).
 
 ## License
 
-Licensed under either of MIT or Apache-2.0 at your option.
+Copyright (c) 2026 Alan Halatian. Licensed under the GNU Affero General Public License v3.0 only; see `LICENSE`.
