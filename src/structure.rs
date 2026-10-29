@@ -42,8 +42,20 @@ pub struct Entity {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EntityKind {
-    Polymer,
+    Polymer(PolymerKind),
     NonPolymer,
     Branched,
     Water,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PolymerKind {
+    PolypeptideL,
+    PolypeptideD,
+    CyclicPseudoPeptide,
+    Dna,
+    Rna,
+    DnaRnaHybrid,
+    PeptideNucleicAcid,
+    Other,
 }

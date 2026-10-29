@@ -7,7 +7,7 @@ use crate::bond_order::BondOrder;
 use crate::element::Element;
 use crate::frame::Frame;
 use crate::geometry::Point3;
-use crate::structure::{Atom, Entity, EntityInstance, EntityKind, Residue, Structure};
+use crate::structure::{Atom, Entity, EntityInstance, EntityKind, PolymerKind, Residue, Structure};
 use crate::{Cif, Row, Value};
 
 // Entries in first-insertion order. Fields are private because `indices` must keep pointing into
@@ -81,12 +81,27 @@ fn code(v: &Value) -> Option<String> {
     string(v).or_else(|| v.as_int().map(|n| n.to_string()))
 }
 
-fn entity_kind(v: &Value) -> Option<EntityKind> {
+// A polymer's kind lives in a separate category (`_entity_poly`), so it's passed in.
+fn entity_kind(v: &Value, polymer: Option<PolymerKind>) -> Option<EntityKind> {
     match v.as_str()? {
-        "polymer" => Some(EntityKind::Polymer),
+        "polymer" => Some(EntityKind::Polymer(polymer?)),
         "non-polymer" => Some(EntityKind::NonPolymer),
         "branched" => Some(EntityKind::Branched),
         "water" => Some(EntityKind::Water),
+        _ => None,
+    }
+}
+
+fn polymer_kind(v: &Value) -> Option<PolymerKind> {
+    match v.as_str()? {
+        "polypeptide(L)" => Some(PolymerKind::PolypeptideL),
+        "polypeptide(D)" => Some(PolymerKind::PolypeptideD),
+        "cyclic-pseudo-peptide" => Some(PolymerKind::CyclicPseudoPeptide),
+        "polydeoxyribonucleotide" => Some(PolymerKind::Dna),
+        "polyribonucleotide" => Some(PolymerKind::Rna),
+        "polydeoxyribonucleotide/polyribonucleotide hybrid" => Some(PolymerKind::DnaRnaHybrid),
+        "peptide nucleic acid" => Some(PolymerKind::PeptideNucleicAcid),
+        "other" => Some(PolymerKind::Other),
         _ => None,
     }
 }
@@ -166,10 +181,21 @@ impl MmCIF {
     pub fn new(cif: Cif) -> Result<Self, MmCifError> {
         let block = cif.blocks.into_iter().next().ok_or(MmCifError::NoDataBlock)?;
 
+        let mut polymer_kinds = HashMap::new();
+        for row in block.category("_entity_poly").iter() {
+            let id = field(&row, "_entity_poly.entity_id", Value::as_int)? as u8;
+            polymer_kinds.insert(id, field(&row, "_entity_poly.type", polymer_kind)?);
+        }
+
         let mut entities = OrderedMap::new();
         for row in block.category("_entity").iter() {
             let id = field(&row, "_entity.id", Value::as_int)? as u8;
-            let entity = Entity { kind: field(&row, "_entity.type", entity_kind)?, name: field(&row, "_entity.pdbx_description", string)? };
+            let kind = match row.get("_entity.type") {
+                None => return Err(MmCifError::MissingField("_entity.type")),
+                // A polymer without an `_entity_poly` row has no kind, so it fails here too.
+                Some(v) => entity_kind(v, polymer_kinds.get(&id).copied()).ok_or(MmCifError::WrongType("_entity.type"))?,
+            };
+            let entity = Entity { kind, name: field(&row, "_entity.pdbx_description", string)? };
             entities.get_or_insert_with(id, || entity);
         }
 
