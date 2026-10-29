@@ -106,8 +106,9 @@ fn polymer_kind(v: &Value) -> Option<PolymerKind> {
     }
 }
 
+// RCSB writes these in lowercase ("doub"), PDBe in uppercase ("DOUB").
 fn bond_order(v: &Value) -> Option<BondOrder> {
-    match v.as_str()? {
+    match v.as_str()?.to_ascii_lowercase().as_str() {
         "sing" => Some(BondOrder::Single),
         "doub" => Some(BondOrder::Double),
         "trip" => Some(BondOrder::Triple),
