@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
 use std::vec;
 
-use crate::bond::Bond;
+use crate::bond::{Bond, ResidueTemplateBond};
 use crate::bond_order::BondOrder;
 use crate::element::Element;
 use crate::frame::Frame;
@@ -200,9 +200,11 @@ impl MmCIF {
                 chain: auth_asym_id,
                 residues: OrderedMap::new(),
             });
-            let residue = instance
-                .residues
-                .get_or_insert_with((auth_seq_id, pdbx_ins_code), || ResidueRows { name: label_comp_id.clone(), seq_id: label_seq_id, atoms: OrderedMap::new() });
+            let residue = instance.residues.get_or_insert_with((auth_seq_id, pdbx_ins_code), || ResidueRows {
+                name: label_comp_id.clone(),
+                seq_id: label_seq_id,
+                atoms: OrderedMap::new(),
+            });
             // Microheterogeneity: altlocs can model two residue types at one position (e.g.
             // PRO/SER). Their atoms differ, not just their positions, so frames can't represent
             // both; keep the first.
@@ -230,7 +232,6 @@ impl MmCIF {
         let mut residues: Vec<Residue> = vec![];
         let mut instances: Vec<EntityInstance> = vec![];
         let mut atom_rows: Vec<&[AtomSite]> = vec![];
-        let mut bonds: Vec<Bond> = vec![];
         for (id, instance) in self.instances.iter() {
             let entity = self.entities.index_of(&instance.entity_id).ok_or(MmCifError::UnknownEntity(instance.entity_id))?;
             let residue_start = residues.len();
@@ -240,18 +241,28 @@ impl MmCIF {
                     atoms.push(Atom { element: rows[0].type_symbol, name: name.clone() });
                     atom_rows.push(rows);
                 }
-                for template in self.chem_comp_bonds.get(&residue.name).into_iter().flatten() {
-                    if let (Some(atom_1), Some(atom_2)) = (residue.atoms.index_of(&template.atom_1), residue.atoms.index_of(&template.atom_2)) {
-                        bonds.push(Bond::new(atom_start + atom_1, atom_start + atom_2));
-                    }
-                }
                 residues.push(Residue { name: residue.name.clone(), number: *number, seq_id: residue.seq_id, atoms: atom_start..atoms.len() });
             }
             instances.push(EntityInstance { id: id.clone(), chain: instance.chain.clone(), entity, residues: residue_start..residues.len() });
         }
         let frames = build_frames(&atom_rows)?;
-        let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonds };
+        let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect() };
         Ok((structure, frames))
+    }
+
+    pub fn build_template_bonds(&self) -> HashMap<String, Vec<ResidueTemplateBond>> {
+        let mut templates: HashMap<String, Vec<ResidueTemplateBond>> = HashMap::new();
+        for (residue_name, bonds) in &self.chem_comp_bonds {
+            for bond in bonds {
+                templates.entry(residue_name.to_string()).or_default().push(ResidueTemplateBond {
+                    atom_name_1: bond.atom_1.to_string(),
+                    atom_name_2: bond.atom_2.to_string(),
+                    aromatic: bond.aromatic_flag,
+                    order: bond.value_order,
+                });
+            }
+        }
+        templates
     }
 }
 

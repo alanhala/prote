@@ -8,7 +8,6 @@ pub struct Structure {
     pub residues: Vec<Residue>,
     pub instances: Vec<EntityInstance>,
     pub entities: Vec<Entity>,
-    pub bonds: Vec<Bond>,
 }
 
 #[derive(Debug)]

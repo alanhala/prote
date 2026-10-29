@@ -16,7 +16,10 @@ fn main() {
     let mmcif = MmCIF::new(cif).unwrap();
     let (structure, frames) = mmcif.build_structure().unwrap();
     let indexed_structure = IndexedStructure::new(Conformer::new(&structure, &frames[0]).unwrap());
-    println!("{:?}", structure.bonds)
+    let template_bonds = &mmcif.build_template_bonds();
+    let bonds = Bond::bonds(&structure, &mmcif.build_template_bonds());
+    // println!("{:?}", bonds);
+
     // let protein = Selection::by_instance(&structure, |instance, entity| entity.kind == EntityKind::Polymer);
     // let ligands = Selection::by_instance(&structure, |instance, entity| entity.kind == EntityKind::NonPolymer);
     // let contacts = Contact::contacts(&indexed_structure, &protein, &ligands);

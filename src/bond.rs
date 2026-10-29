@@ -1,19 +1,28 @@
-use crate::{bond_order::BondOrder, selection::Selection, spatial_index::IndexedStructure};
+use std::collections::HashMap;
 
-pub struct TemplateBond {
-    pub atom_id_1: String,
-    pub atom_id_2: String,
+use crate::{
+    bond_order::BondOrder,
+    structure::{Residue, Structure},
+};
+
+pub struct ResidueTemplateBond {
+    pub atom_name_1: String,
+    pub atom_name_2: String,
     pub order: BondOrder,
+    pub aromatic: bool,
 }
+
 #[derive(Debug)]
 pub struct Bond {
     pub atom_1: usize,
     pub atom_2: usize,
+    pub order: BondOrder,
+    pub aromatic: bool,
 }
 
 impl Bond {
-    pub fn new(atom_1: usize, atom_2: usize) -> Self {
-        Self { atom_1, atom_2 }
+    pub fn new(atom_1: usize, atom_2: usize, order: BondOrder, aromatic: bool) -> Self {
+        Self { atom_1, atom_2, order, aromatic }
     }
 
     // pub fn bonds(indexed: &IndexedStructure, atoms: &Selection) -> Vec<Bond> {
@@ -24,4 +33,20 @@ impl Bond {
     //         .map(|(atom_1, atom_2, distance)| Bond::new(atom_1, atom_2, distance))
     //         .collect()
     // }
+    //
+    pub fn bonds(structure: &Structure, templates: &HashMap<String, Vec<ResidueTemplateBond>>) -> Vec<Bond> {
+        let mut bonds = vec![];
+        let atom_named = |residue: &Residue, name: &str| residue.atoms.clone().find(|&atom| structure.atoms[atom].name == name);
+        for instance in &structure.instances {
+            let residues = &structure.residues[instance.residues.clone()];
+            for residue in residues {
+                for template in templates.get(&residue.name).into_iter().flatten() {
+                    if let (Some(atom_1), Some(atom_2)) = (atom_named(residue, &template.atom_name_1), atom_named(residue, &template.atom_name_2)) {
+                        bonds.push(Bond::new(atom_1, atom_2, template.order, template.aromatic));
+                    }
+                }
+            }
+        }
+        bonds
+    }
 }
