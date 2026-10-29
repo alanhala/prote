@@ -8,6 +8,13 @@ pub struct Structure {
     pub residues: Vec<Residue>,
     pub instances: Vec<EntityInstance>,
     pub entities: Vec<Entity>,
+    pub bonds: Vec<Bond>,
+}
+
+impl Structure {
+    pub fn residue_of(&self, atom: usize) -> usize {
+        self.residues.partition_point(|residue| residue.atoms.end <= atom)
+    }
 }
 
 #[derive(Debug)]

@@ -273,24 +273,26 @@ impl MmCIF {
             instances.push(EntityInstance { id: id.clone(), chain: instance.chain.clone(), entity, residues: residue_start..residues.len() });
         }
         let frames = build_frames(&atom_rows)?;
-        let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect() };
+        let templates = build_template_bonds(&self.chem_comp_bonds);
+        let mut structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonds: vec![] };
+        structure.bonds = Bond::bonds(&structure, &templates);
         Ok((structure, frames))
     }
+}
 
-    pub fn build_template_bonds(&self) -> HashMap<String, Vec<ResidueTemplateBond>> {
-        let mut templates: HashMap<String, Vec<ResidueTemplateBond>> = HashMap::new();
-        for (residue_name, bonds) in &self.chem_comp_bonds {
-            for bond in bonds {
-                templates.entry(residue_name.to_string()).or_default().push(ResidueTemplateBond {
-                    atom_name_1: bond.atom_1.to_string(),
-                    atom_name_2: bond.atom_2.to_string(),
-                    aromatic: bond.aromatic_flag,
-                    order: bond.value_order,
-                });
-            }
+fn build_template_bonds(chem_comp_bonds: &HashMap<String, Vec<ChemCompBond>>) -> HashMap<String, Vec<ResidueTemplateBond>> {
+    let mut templates: HashMap<String, Vec<ResidueTemplateBond>> = HashMap::new();
+    for (residue_name, bonds) in chem_comp_bonds {
+        for bond in bonds {
+            templates.entry(residue_name.to_string()).or_default().push(ResidueTemplateBond {
+                atom_name_1: bond.atom_1.to_string(),
+                atom_name_2: bond.atom_2.to_string(),
+                aromatic: bond.aromatic_flag,
+                order: bond.value_order,
+            });
         }
-        templates
     }
+    templates
 }
 
 // One frame per (model, altloc). Altlocs are local to a few residues, so an atom without a row for

@@ -1,35 +1,24 @@
-use std::{collections::HashMap, fs, hash::Hash};
+use std::fs;
 
-use prote::{
-    bond::Bond,
-    conformer::Conformer,
-    contact::Contact,
-    mmcif::MmCIF,
-    selection::Selection,
-    spatial_index::IndexedStructure,
-    structure::{self, EntityKind, Residue},
-    Cif,
-};
+use prote::{mmcif::MmCIF, selection::Selection, spatial_index::SpatialIndex, Cif};
 
 fn main() {
     let cif = Cif::new(&fs::read_to_string("./cifs/3PTB.cif").unwrap());
     let mmcif = MmCIF::new(cif).unwrap();
     let (structure, frames) = mmcif.build_structure().unwrap();
-    let indexed_structure = IndexedStructure::new(Conformer::new(&structure, &frames[0]).unwrap());
-    let template_bonds = &mmcif.build_template_bonds();
-    let bonds = Bond::bonds(&structure, &mmcif.build_template_bonds());
-    // println!("{:?}", bonds);
+    let ben_atoms = Selection::by_residue(&structure, |residue| residue.name == "BEN");
+    let nitrogen = Selection::by_atom(&structure, |atom| atom.name == "N1" || atom.name == "N2");
+    let protein_atoms = Selection::by_instance(&structure, |_, entity| entity.name == "BETA-TRYPSIN");
+    let asp_189 = Selection::by_residue(&structure, |residue| residue.name == "ASP" && residue.number == 189);
+    let carboxylate_oxygens = Selection::by_atom(&structure, |atom| atom.name == "OD1" || atom.name == "OD2");
 
-    // let protein = Selection::by_instance(&structure, |instance, entity| entity.kind == EntityKind::Polymer);
-    // let ligands = Selection::by_instance(&structure, |instance, entity| entity.kind == EntityKind::NonPolymer);
-    // let contacts = Contact::contacts(&indexed_structure, &protein, &ligands);
-    // for contact in contacts {
-    //     let atom_1 = &structure.atoms[contact.atom_1];
-    //     let resiude = structure.residues.iter().find(|residue| residue.atoms.contains(&contact.atom_1)).unwrap();
-    //     let atom_2 = &structure.atoms[contact.atom_2];
-    //     println!(
-    //         "Distance from protein residue {:?} atom {:?} to ligand atom {:?} is {:?}",
-    //         resiude.name, atom_1.name, atom_2.name, contact.distance
-    //     );
-    // }
+    let query = &ben_atoms.and(&nitrogen);
+    let search = &protein_atoms.and(&asp_189).and(&carboxylate_oxygens);
+    let index = SpatialIndex::new(&frames[0].positions);
+    for (atom_1, atom_2, distance) in index.pairs_closer_than(query, search, 4.0) {
+        let ben_atom = &structure.atoms[atom_1];
+        let protein_atom = &structure.atoms[atom_2];
+        let residue = &structure.residues[structure.residue_of(atom_2)];
+        println!("atom {:?} from {:?}{:?} is at {:?} from atom {:?}", protein_atom, residue.name, residue.number, distance, ben_atom);
+    }
 }

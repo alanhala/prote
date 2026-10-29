@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     bond_order::BondOrder,
+    frame::Frame,
     structure::{EntityKind, PolymerKind, Residue, Structure},
 };
 
@@ -32,8 +33,8 @@ fn backbone_link(entity_kind: EntityKind) -> Option<(&'static str, &'static str)
 }
 
 impl Bond {
-    pub fn new(atom_1: usize, atom_2: usize, order: BondOrder, aromatic: bool) -> Self {
-        Self { atom_1, atom_2, order, aromatic }
+    pub fn length(&self, frame: &Frame) -> f64 {
+        frame.positions[self.atom_1].distance(&frame.positions[self.atom_2])
     }
 
     // pub fn bonds(indexed: &IndexedStructure, atoms: &Selection) -> Vec<Bond> {
@@ -53,7 +54,7 @@ impl Bond {
             for residue in residues {
                 for template in templates.get(&residue.name).into_iter().flatten() {
                     if let (Some(atom_1), Some(atom_2)) = (atom_named(residue, &template.atom_name_1), atom_named(residue, &template.atom_name_2)) {
-                        bonds.push(Bond::new(atom_1, atom_2, template.order, template.aromatic));
+                        bonds.push(Bond { atom_1, atom_2, order: template.order, aromatic: template.aromatic });
                     }
                 }
             }
@@ -65,7 +66,7 @@ impl Bond {
                         continue;
                     }
                     if let (Some(atom_1), Some(atom_2)) = (atom_named(previous, name_1), atom_named(next, name_2)) {
-                        bonds.push(Bond::new(atom_1, atom_2, BondOrder::Single, false));
+                        bonds.push(Bond { atom_1, atom_2, order: BondOrder::Single, aromatic: false });
                     }
                 }
             }

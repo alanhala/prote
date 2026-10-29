@@ -12,5 +12,6 @@ pub mod mmcif;
 pub mod ring;
 pub mod spatial_index;
 pub use cif::*;
+pub mod graph;
 pub mod selection;
 pub mod structure;
