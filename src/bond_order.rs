@@ -10,10 +10,6 @@ pub enum BondOrder {
     Aromatic,
 }
 
-pub trait BondOrderSource {
-    fn bond_order(&self, bond: &Bond, conformers: &[&Conformer]) -> Option<BondOrder>;
-}
-
 impl BondOrder {
     pub fn as_u8(self) -> u8 {
         match self {

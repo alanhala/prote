@@ -1,6 +1,4 @@
 pub mod bond;
-pub mod bond_angle;
-pub mod bond_graph;
 pub mod bond_order;
 pub mod cif;
 pub mod conformer;
@@ -11,8 +9,6 @@ pub mod frame;
 pub mod geometry;
 pub mod kdtree;
 pub mod mmcif;
-pub mod proximity_graph;
-pub mod proximity_graph_old;
 pub mod ring;
 pub mod spatial_index;
 pub use cif::*;
