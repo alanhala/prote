@@ -286,8 +286,14 @@ mod tests {
 
     #[test]
     fn signed_integers() {
-        assert!(matches!(tokens("-7")[0].kind, TokenKind::Integer { value: -7, su: None }));
-        assert!(matches!(tokens("+7")[0].kind, TokenKind::Integer { value: 7, su: None }));
+        assert!(matches!(
+            tokens("-7")[0].kind,
+            TokenKind::Integer { value: -7, su: None }
+        ));
+        assert!(matches!(
+            tokens("+7")[0].kind,
+            TokenKind::Integer { value: 7, su: None }
+        ));
     }
 
     #[test]
@@ -316,7 +322,10 @@ mod tests {
 
     #[test]
     fn integer_with_standard_uncertainty() {
-        assert!(matches!(tokens("12(3)")[0].kind, TokenKind::Integer { value: 12, su: Some(3) }));
+        assert!(matches!(
+            tokens("12(3)")[0].kind,
+            TokenKind::Integer { value: 12, su: Some(3) }
+        ));
     }
 
     #[test]
@@ -363,7 +372,10 @@ mod tests {
 
     #[test]
     fn integer_overflow_promotes_to_float() {
-        assert!(matches!(tokens("99999999999999999999")[0].kind, TokenKind::Float { .. }));
+        assert!(matches!(
+            tokens("99999999999999999999")[0].kind,
+            TokenKind::Float { .. }
+        ));
     }
 
     #[test]
@@ -426,7 +438,10 @@ mod tests {
     #[test]
     fn unterminated_quote_is_an_error() {
         let results = results("'unterminated");
-        assert!(matches!(results[0], Err(LexError::UnterminatedString { quote: '\'', .. })));
+        assert!(matches!(
+            results[0],
+            Err(LexError::UnterminatedString { quote: '\'', .. })
+        ));
     }
 
     #[test]

@@ -15,9 +15,47 @@ impl Point3 {
     pub fn distance(&self, other: &Self) -> f64 {
         ((self.x - other.x).powi(2) + (self.y - other.y).powi(2) + (self.z - other.z).powi(2)).sqrt()
     }
+
+    pub fn plane(points: &[Point3]) -> (Plane3, f64) {
+        let n = points.len() as f64;
+        let centroid = Point3::new(
+            points.iter().map(|p| p.x).sum::<f64>() / n,
+            points.iter().map(|p| p.y).sum::<f64>() / n,
+            points.iter().map(|p| p.z).sum::<f64>() / n,
+        );
+        let mut covariance = nalgebra::Matrix3::<f64>::zeros();
+        for point in points {
+            let distance = nalgebra::Vector3::new(point.x - centroid.x, point.y - centroid.y, point.z - centroid.z);
+            covariance += distance * distance.transpose();
+        }
+        covariance /= n;
+        let eigen = nalgebra::SymmetricEigen::new(covariance);
+        let (min_index, _) = eigen
+            .eigenvalues
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .expect("eigen can't be empty");
+        let normal_column = eigen.eigenvectors.column(min_index);
+        let normal = Vector3::new(normal_column[0], normal_column[1], normal_column[2]);
+        let deviation = points
+            .iter()
+            .map(|p| {
+                let offset = Vector3::new(p.x - centroid.x, p.y - centroid.y, p.z - centroid.z);
+                offset.dot(&normal).abs()
+            })
+            .fold(0.0, f64::max);
+        (Plane3 { centroid, normal }, deviation)
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct Plane3 {
+    centroid: Point3,
+    normal: Vector3,
+}
+
+#[derive(Debug, Clone)]
 pub struct Vector3 {
     x: f64,
     y: f64,

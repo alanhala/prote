@@ -1,34 +1,57 @@
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::ops::Range;
+use std::collections::{BTreeSet, HashMap};
+use std::hash::Hash;
+use std::vec;
 
-use crate::atom::{Atom, Element};
-use crate::bond_order::{BondOrder, BondOrderSource};
-use crate::conformer::Conformer;
-use crate::ensemble::Ensemble;
+use crate::bond::{Bond, ResidueTemplateBond};
+use crate::bond_order::BondOrder;
+use crate::element::Element;
+use crate::frame::Frame;
 use crate::geometry::Point3;
-use crate::residue::Residue;
-use crate::topology::Topology;
+use crate::structure::{Atom, Entity, EntityInstance, EntityKind, PolymerKind, Residue, Structure};
 use crate::{Cif, Row, Value};
+
+// Entries in first-insertion order. Fields are private because `indices` must keep pointing into
+// `entries`.
+#[derive(Debug)]
+pub struct OrderedMap<K, V> {
+    indices: HashMap<K, usize>,
+    entries: Vec<(K, V)>,
+}
+
+impl<K: Eq + Hash + Clone, V> OrderedMap<K, V> {
+    pub fn new() -> Self {
+        Self { indices: HashMap::new(), entries: vec![] }
+    }
+
+    pub fn get_or_insert_with(&mut self, key: K, value: impl FnOnce() -> V) -> &mut V {
+        let index = *self.indices.entry(key).or_insert_with_key(|key| {
+            self.entries.push((key.clone(), value()));
+            self.entries.len() - 1
+        });
+        &mut self.entries[index].1
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.entries.iter().map(|(key, value)| (key, value))
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.entries.iter().map(|(_, value)| value)
+    }
+
+    pub fn index_of(&self, key: &K) -> Option<usize> {
+        self.indices.get(key).copied()
+    }
+}
 
 #[derive(Debug)]
 pub enum MmCifError {
     NoDataBlock,
     MissingField(&'static str),
     WrongType(&'static str),
+    UnknownEntity(u8),
+    MissingAtom { atom: usize, model: i64 },
 }
-
-impl fmt::Display for MmCifError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MmCifError::NoDataBlock => write!(f, "CIF file has no data blocks"),
-            MmCifError::MissingField(tag) => write!(f, "missing field {tag}"),
-            MmCifError::WrongType(tag) => write!(f, "field {tag} has an unexpected value type"),
-        }
-    }
-}
-
-impl std::error::Error for MmCifError {}
 
 fn field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<T>) -> Result<T, MmCifError> {
     match row.get(tag) {
@@ -40,11 +63,7 @@ fn field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<
 /// Like `field`, but a CIF `.`/`?` (inapplicable/unknown) is `Ok(None)` rather than
 /// an error — e.g. `_struct_conn` partner seq_id, which is inapplicable for
 /// non-polymer partners (a bound ion has no sequence position).
-fn optional_field<'a, T>(
-    row: &Row<'a>,
-    tag: &'static str,
-    cast: fn(&'a Value) -> Option<T>,
-) -> Result<Option<T>, MmCifError> {
+fn optional_field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<T>) -> Result<Option<T>, MmCifError> {
     match row.get(tag) {
         None => Err(MmCifError::MissingField(tag)),
         Some(Value::Inapplicable) | Some(Value::Unknown) => Ok(None),
@@ -52,17 +71,20 @@ fn optional_field<'a, T>(
     }
 }
 
-#[derive(Debug)]
-pub enum EntityKind {
-    Polymer,
-    NonPolymer,
-    Branched,
-    Water,
+fn string(v: &Value) -> Option<String> {
+    v.as_str().map(str::to_string)
 }
 
-fn entity_kind(v: &Value) -> Option<EntityKind> {
+// Identifiers like `auth_asym_id` are often digits ("1"), which the lexer reads as integers rather
+// than strings.
+fn code(v: &Value) -> Option<String> {
+    string(v).or_else(|| v.as_int().map(|n| n.to_string()))
+}
+
+// A polymer's kind lives in a separate category (`_entity_poly`), so it's passed in.
+fn entity_kind(v: &Value, polymer: Option<PolymerKind>) -> Option<EntityKind> {
     match v.as_str()? {
-        "polymer" => Some(EntityKind::Polymer),
+        "polymer" => Some(EntityKind::Polymer(polymer?)),
         "non-polymer" => Some(EntityKind::NonPolymer),
         "branched" => Some(EntityKind::Branched),
         "water" => Some(EntityKind::Water),
@@ -70,8 +92,23 @@ fn entity_kind(v: &Value) -> Option<EntityKind> {
     }
 }
 
-fn bond_order(v: &Value) -> Option<BondOrder> {
+fn polymer_kind(v: &Value) -> Option<PolymerKind> {
     match v.as_str()? {
+        "polypeptide(L)" => Some(PolymerKind::PolypeptideL),
+        "polypeptide(D)" => Some(PolymerKind::PolypeptideD),
+        "cyclic-pseudo-peptide" => Some(PolymerKind::CyclicPseudoPeptide),
+        "polydeoxyribonucleotide" => Some(PolymerKind::Dna),
+        "polyribonucleotide" => Some(PolymerKind::Rna),
+        "polydeoxyribonucleotide/polyribonucleotide hybrid" => Some(PolymerKind::DnaRnaHybrid),
+        "peptide nucleic acid" => Some(PolymerKind::PeptideNucleicAcid),
+        "other" => Some(PolymerKind::Other),
+        _ => None,
+    }
+}
+
+// RCSB writes these in lowercase ("doub"), PDBe in uppercase ("DOUB").
+fn bond_order(v: &Value) -> Option<BondOrder> {
+    match v.as_str()?.to_ascii_lowercase().as_str() {
         "sing" => Some(BondOrder::Single),
         "doub" => Some(BondOrder::Double),
         "trip" => Some(BondOrder::Triple),
@@ -89,22 +126,7 @@ fn flag(v: &Value) -> Option<bool> {
     }
 }
 
-#[derive(Debug)]
-pub struct Entity {
-    pub id: u8,
-    pub kind: EntityKind,
-    pub name: String,
-}
-
-#[derive(Debug)]
-pub struct StructAsym {
-    pub id: String,
-    pub entity_id: u8,
-}
-
 fn element(v: &Value) -> Option<Element> {
-    // `_atom_site.type_symbol` is conventionally all-uppercase ("FE", "ZN"),
-    // not `Element::from_symbol`'s canonical mixed-case form ("Fe", "Zn").
     let symbol = v.as_str()?;
     let mut chars = symbol.chars();
     let normalized = match chars.next() {
@@ -114,268 +136,194 @@ fn element(v: &Value) -> Option<Element> {
     Element::from_symbol(&normalized)
 }
 
-fn is_hetero(v: &Value) -> Option<bool> {
-    match v.as_str()? {
-        "ATOM" => Some(false),
-        "HETATM" => Some(true),
-        _ => None,
-    }
-}
-
-#[derive(Debug)]
-pub struct AtomSite {
-    pub id: u32,
-    pub label_entity_id: u8,
-    pub label_asym_id: String,
-    pub label_atom_id: String,
-    pub label_alt_id: Option<String>,
-    // We use auth_seq_id because for non-polymers the label is `.`, which will end up merging all the atoms into one
-    // residue
-    pub auth_seq_id: i64,
-    // Disambiguates residues that share an auth_seq_id (e.g. an inserted residue kept under a reference numbering scheme).
-    // For example: 3PTB chain A residue 184 (TYR) vs 184A (GLY).
-    pub pdbx_ins_code: Option<String>,
-    pub label_comp_id: String,
-    pub type_symbol: Element,
-    pub is_hetero: bool,
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-    pub occupancy: f32,
-    pub b_factor: f32,
-}
-
 #[derive(Debug)]
 pub struct ChemCompBond {
+    pub atom_1: String,
+    pub atom_2: String,
     pub value_order: BondOrder,
     pub aromatic_flag: bool,
 }
 
 #[derive(Debug)]
-pub struct MmCIF {
-    pub entities: HashMap<u8, Entity>,
-    pub struct_asyms: HashMap<String, StructAsym>,
-    pub atom_sites: HashMap<String, Vec<AtomSite>>,
-    pub chem_comp_bonds: HashMap<(String, String, String), ChemCompBond>,
+pub struct AtomSite {
+    pub type_symbol: Element,
+    pub label_alt_id: Option<String>,
+    pub position: Point3,
+    pub occupancy: f32,
+    pub b_factor: f32,
+    pub model: i64,
 }
 
-impl BondOrderSource for MmCIF {
-    fn bond_order(&self, topology: &Topology, atom_1: usize, atom_2: usize) -> Option<BondOrder> {
-        let res_1 = topology.residue_index_for(atom_1);
-        let res_2 = topology.residue_index_for(atom_2);
-        let atom_1 = &topology.atoms[atom_1];
-        let atom_2 = &topology.atoms[atom_2];
-        if res_1 == res_2 {
-            let res = &topology.residues[res_1];
-            match self.chem_comp_bonds_lookup(&res.name, &atom_1.name, &atom_2.name) {
-                None => None,
-                // TODO: this ignores `chem_comp_bond.aromatic_flag` — a ring bond currently
-                // resolves to whatever Kekulé value_order (Single/Double) the dictionary
-                // happens to record, never `BondOrder::Aromatic`. If `aromatic_flag` is true,
-                // return `Some(BondOrder::Aromatic)` instead of `value_order`.
-                Some(chem_comp_bond) => Some(chem_comp_bond.value_order),
-            }
-        } else {
-            None
-        }
-    }
+#[derive(Debug)]
+pub struct InstanceRows {
+    pub entity_id: u8,
+    pub chain: String,
+    // Keyed by (auth_seq_id, pdbx_PDB_ins_code). We use auth_seq_id because for non-polymers the
+    // label is `.`, which would merge all their atoms into one residue; the insertion code
+    // separates residues that share it (e.g. 3PTB chain A: TYR 184 and GLY 184A).
+    pub residues: OrderedMap<(i64, Option<String>), ResidueRows>,
+}
+
+#[derive(Debug)]
+pub struct ResidueRows {
+    pub name: String,
+    pub seq_id: Option<i64>,
+    pub atoms: OrderedMap<String, Vec<AtomSite>>,
+}
+
+#[derive(Debug)]
+pub struct MmCIF {
+    pub entities: OrderedMap<u8, Entity>,
+    pub instances: OrderedMap<String, InstanceRows>,
+    pub chem_comp_bonds: HashMap<String, Vec<ChemCompBond>>,
 }
 
 impl MmCIF {
     pub fn new(cif: Cif) -> Result<Self, MmCifError> {
         let block = cif.blocks.into_iter().next().ok_or(MmCifError::NoDataBlock)?;
 
-        let mut entities = HashMap::new();
-        if let Some(loop_) = block.loop_by_category("_entity") {
-            for row in loop_.iter() {
-                let id = field(&row, "_entity.id", Value::as_int)? as u8;
-                let kind = field(&row, "_entity.type", entity_kind)?;
-                let name = field(&row, "_entity.pdbx_description", Value::as_str)?.to_string();
-                entities.insert(id, Entity { id, kind, name });
-            }
+        let mut polymer_kinds = HashMap::new();
+        for row in block.category("_entity_poly").iter() {
+            let id = field(&row, "_entity_poly.entity_id", Value::as_int)? as u8;
+            polymer_kinds.insert(id, field(&row, "_entity_poly.type", polymer_kind)?);
         }
 
-        let mut struct_asyms = HashMap::new();
-        if let Some(loop_) = block.loop_by_category("_struct_asym") {
-            for row in loop_.iter() {
-                let id = field(&row, "_struct_asym.id", Value::as_str)?.to_string();
-                let entity_id = field(&row, "_struct_asym.entity_id", Value::as_int)? as u8;
-                struct_asyms.insert(id.clone(), StructAsym { id, entity_id });
-            }
+        let mut entities = OrderedMap::new();
+        for row in block.category("_entity").iter() {
+            let id = field(&row, "_entity.id", Value::as_int)? as u8;
+            let kind = match row.get("_entity.type") {
+                None => return Err(MmCifError::MissingField("_entity.type")),
+                // A polymer without an `_entity_poly` row has no kind, so it fails here too.
+                Some(v) => entity_kind(v, polymer_kinds.get(&id).copied()).ok_or(MmCifError::WrongType("_entity.type"))?,
+            };
+            let entity = Entity { kind, name: field(&row, "_entity.pdbx_description", string)? };
+            entities.get_or_insert_with(id, || entity);
         }
 
-        let mut atom_sites: HashMap<String, Vec<AtomSite>> = HashMap::new();
-        if let Some(loop_) = block.loop_by_category("_atom_site") {
-            for row in loop_.iter() {
-                let id = field(&row, "_atom_site.id", Value::as_int)? as u32;
-                let label_entity_id = field(&row, "_atom_site.label_entity_id", Value::as_int)? as u8;
-                let label_asym_id = field(&row, "_atom_site.label_asym_id", Value::as_str)?.to_string();
-                let label_atom_id = field(&row, "_atom_site.label_atom_id", Value::as_str)?.to_string();
-                let label_alt_id = optional_field(&row, "_atom_site.label_alt_id", Value::as_str)?.map(str::to_string);
-                let auth_seq_id = field(&row, "_atom_site.auth_seq_id", Value::as_int)?;
-                let pdbx_ins_code =
-                    optional_field(&row, "_atom_site.pdbx_PDB_ins_code", Value::as_str)?.map(str::to_string);
-                let label_comp_id = field(&row, "_atom_site.label_comp_id", Value::as_str)?.to_string();
-                let type_symbol = field(&row, "_atom_site.type_symbol", element)?;
-                let is_hetero_atom = field(&row, "_atom_site.group_PDB", is_hetero)?;
-                let x = field(&row, "_atom_site.Cartn_x", Value::as_float)?;
-                let y = field(&row, "_atom_site.Cartn_y", Value::as_float)?;
-                let z = field(&row, "_atom_site.Cartn_z", Value::as_float)?;
-                let occupancy = field(&row, "_atom_site.occupancy", Value::as_float)? as f32;
-                let b_factor = field(&row, "_atom_site.B_iso_or_equiv", Value::as_float)? as f32;
-                atom_sites.entry(label_asym_id.clone()).or_default().push(AtomSite {
-                    id,
-                    label_entity_id,
-                    label_asym_id,
-                    label_atom_id,
-                    label_alt_id,
-                    auth_seq_id,
-                    pdbx_ins_code,
-                    label_comp_id,
-                    type_symbol,
-                    is_hetero: is_hetero_atom,
-                    x,
-                    y,
-                    z,
-                    occupancy,
-                    b_factor,
+        let mut instances = OrderedMap::new();
+        for row in block.category("_atom_site").iter() {
+            let label_asym_id = field(&row, "_atom_site.label_asym_id", string)?;
+            let label_entity_id = field(&row, "_atom_site.label_entity_id", Value::as_int)? as u8;
+            let auth_asym_id = field(&row, "_atom_site.auth_asym_id", code)?;
+            let auth_seq_id = field(&row, "_atom_site.auth_seq_id", Value::as_int)?;
+            let pdbx_ins_code = optional_field(&row, "_atom_site.pdbx_PDB_ins_code", code)?;
+            let label_comp_id = field(&row, "_atom_site.label_comp_id", string)?;
+            let label_atom_id = field(&row, "_atom_site.label_atom_id", string)?;
+            let label_seq_id = optional_field(&row, "_atom_site.label_seq_id", Value::as_int)?;
+            let atom_site = AtomSite {
+                type_symbol: field(&row, "_atom_site.type_symbol", element)?,
+                label_alt_id: optional_field(&row, "_atom_site.label_alt_id", string)?,
+                position: Point3::new(
+                    field(&row, "_atom_site.Cartn_x", Value::as_float)?,
+                    field(&row, "_atom_site.Cartn_y", Value::as_float)?,
+                    field(&row, "_atom_site.Cartn_z", Value::as_float)?,
+                ),
+                occupancy: field(&row, "_atom_site.occupancy", Value::as_float)? as f32,
+                b_factor: field(&row, "_atom_site.B_iso_or_equiv", Value::as_float)? as f32,
+                model: field(&row, "_atom_site.pdbx_PDB_model_num", Value::as_int)?,
+            };
+            let instance = instances.get_or_insert_with(label_asym_id, || InstanceRows {
+                entity_id: label_entity_id,
+                chain: auth_asym_id,
+                residues: OrderedMap::new(),
+            });
+            let residue = instance.residues.get_or_insert_with((auth_seq_id, pdbx_ins_code), || ResidueRows {
+                name: label_comp_id.clone(),
+                seq_id: label_seq_id,
+                atoms: OrderedMap::new(),
+            });
+            // Microheterogeneity: altlocs can model two residue types at one position (e.g.
+            // PRO/SER). Their atoms differ, not just their positions, so frames can't represent
+            // both; keep the first.
+            if label_comp_id != residue.name {
+                continue;
+            }
+            residue.atoms.get_or_insert_with(label_atom_id, Vec::new).push(atom_site);
+        }
+
+        let mut chem_comp_bonds: HashMap<String, Vec<ChemCompBond>> = HashMap::new();
+        for row in block.category("_chem_comp_bond").iter() {
+            chem_comp_bonds.entry(field(&row, "_chem_comp_bond.comp_id", string)?).or_default().push(ChemCompBond {
+                atom_1: field(&row, "_chem_comp_bond.atom_id_1", string)?,
+                atom_2: field(&row, "_chem_comp_bond.atom_id_2", string)?,
+                value_order: field(&row, "_chem_comp_bond.value_order", bond_order)?,
+                aromatic_flag: field(&row, "_chem_comp_bond.pdbx_aromatic_flag", flag)?,
+            });
+        }
+
+        Ok(Self { entities, instances, chem_comp_bonds })
+    }
+
+    pub fn build_structure(&self) -> Result<(Structure, Vec<Frame>), MmCifError> {
+        let mut atoms: Vec<Atom> = vec![];
+        let mut residues: Vec<Residue> = vec![];
+        let mut instances: Vec<EntityInstance> = vec![];
+        let mut atom_rows: Vec<&[AtomSite]> = vec![];
+        for (id, instance) in self.instances.iter() {
+            let entity = self.entities.index_of(&instance.entity_id).ok_or(MmCifError::UnknownEntity(instance.entity_id))?;
+            let residue_start = residues.len();
+            for ((number, _), residue) in instance.residues.iter() {
+                let atom_start = atoms.len();
+                for (name, rows) in residue.atoms.iter() {
+                    atoms.push(Atom { element: rows[0].type_symbol, name: name.clone() });
+                    atom_rows.push(rows);
+                }
+                residues.push(Residue { name: residue.name.clone(), number: *number, seq_id: residue.seq_id, atoms: atom_start..atoms.len() });
+            }
+            instances.push(EntityInstance { id: id.clone(), chain: instance.chain.clone(), entity, residues: residue_start..residues.len() });
+        }
+        let frames = build_frames(&atom_rows)?;
+        let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect() };
+        Ok((structure, frames))
+    }
+
+    pub fn build_template_bonds(&self) -> HashMap<String, Vec<ResidueTemplateBond>> {
+        let mut templates: HashMap<String, Vec<ResidueTemplateBond>> = HashMap::new();
+        for (residue_name, bonds) in &self.chem_comp_bonds {
+            for bond in bonds {
+                templates.entry(residue_name.to_string()).or_default().push(ResidueTemplateBond {
+                    atom_name_1: bond.atom_1.to_string(),
+                    atom_name_2: bond.atom_2.to_string(),
+                    aromatic: bond.aromatic_flag,
+                    order: bond.value_order,
                 });
             }
         }
+        templates
+    }
+}
 
-        let mut chem_comp_bonds: HashMap<(String, String, String), ChemCompBond> = HashMap::new();
-        if let Some(loop_) = block.loop_by_category("_chem_comp_bond") {
-            for row in loop_.iter() {
-                let comp_id = field(&row, "_chem_comp_bond.comp_id", Value::as_str)?.to_string();
-                let atom_id_1 = field(&row, "_chem_comp_bond.atom_id_1", Value::as_str)?.to_string();
-                let atom_id_2 = field(&row, "_chem_comp_bond.atom_id_2", Value::as_str)?.to_string();
-                let value_order = field(&row, "_chem_comp_bond.value_order", bond_order)?;
-                let aromatic_flag = field(&row, "_chem_comp_bond.pdbx_aromatic_flag", flag)?;
-                chem_comp_bonds.insert(
-                    (comp_id, atom_id_1, atom_id_2),
-                    ChemCompBond {
-                        value_order,
-                        aromatic_flag,
-                    },
-                );
-            }
+// One frame per (model, altloc). Altlocs are local to a few residues, so an atom without a row for
+// the frame's altloc takes its row without an altloc, else its highest-occupancy row; that keeps
+// every frame covering every atom.
+fn build_frames(atom_rows: &[&[AtomSite]]) -> Result<Vec<Frame>, MmCifError> {
+    let all_rows = || atom_rows.iter().flat_map(|rows| rows.iter());
+    let models: BTreeSet<i64> = all_rows().map(|atom_site| atom_site.model).collect();
+    let alt_ids: BTreeSet<&str> = all_rows().filter_map(|atom_site| atom_site.label_alt_id.as_deref()).collect();
+    let alt_ids: Vec<Option<&str>> = if alt_ids.is_empty() { vec![None] } else { alt_ids.into_iter().map(Some).collect() };
+    let mut frames = vec![];
+    for &model in &models {
+        for &alt_id in &alt_ids {
+            let picked = atom_rows
+                .iter()
+                .enumerate()
+                .map(|(atom, rows)| pick_row(rows, model, alt_id).ok_or(MmCifError::MissingAtom { atom, model }))
+                .collect::<Result<Vec<_>, _>>()?;
+            frames.push(Frame::new(
+                frames.len(),
+                picked.iter().map(|atom_site| atom_site.position).collect(),
+                picked.iter().map(|atom_site| atom_site.occupancy).collect(),
+                picked.iter().map(|atom_site| atom_site.b_factor).collect(),
+            ));
         }
-
-        Ok(Self {
-            entities,
-            struct_asyms,
-            atom_sites,
-            chem_comp_bonds,
-        })
     }
+    Ok(frames)
+}
 
-    // TODO: return Result<Vec<Molecule>, MmCifError> instead of unwrapping —
-    // a struct_asym with no matching entity_id or no atom_site rows is a
-    // malformed-file problem, not an invariant of this program, same as the
-    // field-level errors in `new`.
-    pub fn build_ensembles(&self) -> Vec<Ensemble> {
-        let mut ensembles: Vec<Ensemble> = vec![];
-        for struct_asym in self.struct_asym() {
-            let entity = self.entity(struct_asym.entity_id).unwrap();
-            let mut conformers: HashMap<Option<String>, (Vec<Point3>, Vec<f32>, Vec<f32>)> = HashMap::new();
-            conformers.insert(None, (vec![], vec![], vec![]));
-            let mut residues: Vec<Residue> = vec![];
-            let mut atoms: Vec<Atom> = vec![];
-            let atom_sites = self.atom_sites(&struct_asym.id).unwrap();
-            let mut residue_start = 0;
-            // (auth_seq_id, pdbx_ins_code, label_atom_id) is the real atom identity. auth_seq_id
-            // alone collides for inserted residues (e.g. 3PTB chain A: TYR 184 and GLY 184A both
-            // have an atom named "N"), and label_alt_id must be ignored here since alt records
-            // are the *same* atom, not different ones.
-            let mut seen_atoms: HashSet<(i64, Option<String>, String)> = HashSet::new();
-            for (i, atom_site) in atom_sites.iter().enumerate() {
-                let identity = (
-                    atom_site.auth_seq_id,
-                    atom_site.pdbx_ins_code.clone(),
-                    atom_site.label_atom_id.clone(),
-                );
-                if seen_atoms.insert(identity) {
-                    atoms.push(Atom::new(atom_site.type_symbol, atom_site.label_atom_id.clone()));
-                }
-                match &atom_site.label_alt_id {
-                    None => {
-                        for (_, conformer) in conformers.iter_mut() {
-                            conformer.0.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
-                            conformer.1.push(atom_site.occupancy);
-                            conformer.2.push(atom_site.b_factor);
-                        }
-                    }
-                    alt_id => match conformers.get_mut(&alt_id) {
-                        None => {
-                            let template = conformers.get(&None).unwrap();
-                            let mut new_positions = template.0.clone();
-                            new_positions.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
-                            let mut new_occupancies = template.1.clone();
-                            new_occupancies.push(atom_site.occupancy);
-                            let mut new_b_factors = template.2.clone();
-                            new_b_factors.push(atom_site.b_factor);
-                            conformers.insert(alt_id.clone(), (new_positions, new_occupancies, new_b_factors));
-                        }
-                        Some(conformer) => {
-                            conformer.0.push(Point3::new(atom_site.x, atom_site.y, atom_site.z));
-                            conformer.1.push(atom_site.occupancy);
-                            conformer.2.push(atom_site.b_factor);
-                        }
-                    },
-                }
-
-                let build_resiude = i + 1 == atom_sites.len()
-                    || atom_sites[i + 1].auth_seq_id != atom_site.auth_seq_id
-                    || atom_sites[i + 1].pdbx_ins_code != atom_site.pdbx_ins_code;
-                if build_resiude {
-                    residues.push(Residue::new(
-                        atom_site.label_comp_id.clone(),
-                        Range {
-                            start: residue_start,
-                            end: atoms.len(), // end is exclusive
-                        },
-                        atom_sites[i].is_hetero,
-                    ));
-                    residue_start = atoms.len();
-                }
-            }
-            let keep_none = conformers.len() == 1;
-            let conformers: Vec<Conformer> = conformers
-                .into_iter()
-                .filter(|c| c.0.is_some() || keep_none)
-                .map(|conformer| {
-                    assert!(conformer.1 .0.len() == atoms.len());
-                    Conformer::new(conformer.1 .0, conformer.1 .1, conformer.1 .2)
-                })
-                .collect();
-            let topology = Topology::new(entity.name.clone(), atoms, residues);
-            ensembles.push(Ensemble::new(ensembles.len(), topology, conformers));
-        }
-        ensembles
-    }
-
-    pub fn entities(&self) -> impl Iterator<Item = &Entity> {
-        self.entities.values()
-    }
-
-    pub fn entity(&self, id: u8) -> Option<&Entity> {
-        self.entities.get(&id)
-    }
-
-    pub fn atom_sites(&self, struct_asym_id: &str) -> Option<&Vec<AtomSite>> {
-        self.atom_sites.get(struct_asym_id)
-    }
-
-    pub fn struct_asym(&self) -> impl Iterator<Item = &StructAsym> {
-        self.struct_asyms.values()
-    }
-
-    fn chem_comp_bonds_lookup(&self, comp_id: &str, atom_1: &str, atom_2: &str) -> Option<&ChemCompBond> {
-        self.chem_comp_bonds
-            .get(&(comp_id.to_string(), atom_1.to_string(), atom_2.to_string()))
-            .or_else(|| {
-                self.chem_comp_bonds
-                    .get(&(comp_id.to_string(), atom_2.to_string(), atom_1.to_string()))
-            })
-    }
+fn pick_row<'a>(rows: &'a [AtomSite], model: i64, alt_id: Option<&str>) -> Option<&'a AtomSite> {
+    let in_model = || rows.iter().filter(move |atom_site| atom_site.model == model);
+    in_model()
+        .find(|atom_site| atom_site.label_alt_id.as_deref() == alt_id)
+        .or_else(|| in_model().find(|atom_site| atom_site.label_alt_id.is_none()))
+        .or_else(|| in_model().reduce(|best, atom_site| if atom_site.occupancy > best.occupancy { atom_site } else { best }))
 }

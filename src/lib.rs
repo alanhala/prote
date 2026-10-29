@@ -1,5 +1,3 @@
-pub mod atom;
-pub mod atom_pointer;
 pub mod bond;
 pub mod bond_angle;
 pub mod bond_graph;
@@ -8,14 +6,15 @@ pub mod cif;
 pub mod conformer;
 pub mod contact;
 pub mod contact_graph;
-pub mod ensemble;
+pub mod element;
+pub mod frame;
 pub mod geometry;
 pub mod kdtree;
 pub mod mmcif;
-pub mod molecule;
-pub mod proximity;
-pub mod residue;
+pub mod proximity_graph;
+pub mod proximity_graph_old;
+pub mod ring;
 pub mod spatial_index;
-pub mod topology;
-
 pub use cif::*;
+pub mod selection;
+pub mod structure;
