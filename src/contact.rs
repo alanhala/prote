@@ -1,4 +1,4 @@
-use crate::{graph, selection::Selection, spatial_index::SpatialIndex, structure::Structure};
+use crate::{selection::Selection, spatial_index::SpatialIndex, structure::Structure};
 
 #[derive(Debug)]
 pub struct Contact {
@@ -13,10 +13,9 @@ impl Contact {
     }
 
     pub fn contacts(structure: &Structure, index: &SpatialIndex, query: &Selection, search: &Selection) -> Vec<Contact> {
-        let neighbors = graph::adjacency(structure.atoms.len(), structure.bonds.iter().map(|bond| (bond.atom_1, bond.atom_2)));
         index
             .pairs_within(query, search, |atom_id| structure.atoms[atom_id].element.van_der_waals_radius())
-            .filter(|&(atom_1, atom_2, _)| !graph::within_steps(&neighbors, atom_1, atom_2, 3))
+            .filter(|&(atom_1, atom_2, _)| !structure.bonds.within_steps(atom_1, atom_2, 3))
             .map(|(atom_1, atom_2, distance)| Contact::new(atom_1, atom_2, distance))
             .collect()
     }

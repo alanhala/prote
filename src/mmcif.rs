@@ -2,13 +2,14 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
 use std::vec;
 
-use crate::bond::{Bond, ResidueTemplateBond};
+use crate::bond::ResidueTemplateBond;
 use crate::bond_order::BondOrder;
 use crate::element::Element;
 use crate::frame::Frame;
 use crate::geometry::Point3;
+use crate::graph::Graph;
 use crate::structure::{Atom, Entity, EntityInstance, EntityKind, PolymerKind, Residue, Structure};
-use crate::{Cif, Row, Value};
+use crate::{bond_graph, Cif, Row, Value};
 
 // Entries in first-insertion order. Fields are private because `indices` must keep pointing into
 // `entries`.
@@ -274,8 +275,8 @@ impl MmCIF {
         }
         let frames = build_frames(&atom_rows)?;
         let templates = build_template_bonds(&self.chem_comp_bonds);
-        let mut structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonds: vec![] };
-        structure.bonds = Bond::bonds(&structure, &templates);
+        let mut structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonds: Graph::empty() };
+        structure.bonds = bond_graph::new(&structure, &templates);
         Ok((structure, frames))
     }
 }
