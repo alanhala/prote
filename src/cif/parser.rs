@@ -4,25 +4,26 @@ use super::ast::{Cif, DataBlock, Loop, Member, Value};
 use super::lexer::{Lexer, Token};
 
 pub struct Parser<'a> {
-    tokens: Vec<Token<'a>>,
-    pos: usize,
+    lexer: Lexer<'a>,
+    // Tokens are read one ahead of the parser rather than all up front, so `try_*` can look at the
+    // next token before consuming it.
+    next: Option<Token<'a>>,
 }
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
-        Parser {
-            tokens: Lexer::new(input).map(Result::unwrap).collect(),
-            pos: 0,
-        }
+        let mut lexer = Lexer::new(input);
+        let next = lexer.next().map(Result::unwrap);
+        Parser { lexer, next }
     }
 
     fn peek_kind(&self) -> Option<TokenKind> {
-        self.tokens.get(self.pos).map(|t| t.kind)
+        self.next.map(|t| t.kind)
     }
 
     fn consume(&mut self) -> Token<'a> {
-        let token = self.tokens[self.pos];
-        self.pos += 1;
+        let token = self.next.expect("consume follows a peek");
+        self.next = self.lexer.next().map(Result::unwrap);
         token
     }
 
@@ -68,25 +69,20 @@ impl<'a> Parser<'a> {
                 while let Some(tag) = self.try_tag() {
                     tags.push(tag);
                 }
-                let mut values: Vec<Value> = vec![];
-                while let Some(value) = self.try_value() {
-                    values.push(value);
-                }
-
                 let cols = tags.len();
                 assert!(cols > 0, "loop_ has no tags");
-                assert!(!values.is_empty(), "loop_ has no values");
-                assert!(values.len().is_multiple_of(cols), "loop values not a multiple of tags");
 
-                let mut it = values.into_iter();
-                let mut rows = Vec::new();
-                loop {
-                    let row: Vec<Value> = it.by_ref().take(cols).collect();
-                    if row.is_empty() {
-                        break;
+                // Values go straight into their row, rather than into one list that is then split.
+                let mut rows: Vec<Vec<Value>> = vec![];
+                let mut row = Vec::with_capacity(cols);
+                while let Some(value) = self.try_value() {
+                    row.push(value);
+                    if row.len() == cols {
+                        rows.push(std::mem::replace(&mut row, Vec::with_capacity(cols)));
                     }
-                    rows.push(row);
                 }
+                assert!(!rows.is_empty() || !row.is_empty(), "loop_ has no values");
+                assert!(row.is_empty(), "loop values not a multiple of tags");
 
                 Some(Loop { tags, rows })
             }
@@ -139,7 +135,13 @@ impl<'a> Parser<'a> {
 
 impl Cif {
     pub fn new(input: &str) -> Cif {
-        Parser::new(input).parse_cif()
+        let mut parser = Parser::new(input);
+        let cif = parser.parse_cif();
+        // Parsing can stop early (e.g. at a save frame), but the rest of the input must still lex.
+        parser.lexer.for_each(|token| {
+            token.unwrap();
+        });
+        cif
     }
 }
 

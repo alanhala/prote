@@ -50,6 +50,11 @@ impl<'a> Row<'a> {
         let i = self.tags.iter().position(|t| t.eq_ignore_ascii_case(tag))?;
         self.values.get(i)
     }
+
+    // By position, from `Loop::tag_index`; reading many rows this way skips searching each row's tags.
+    pub fn at(&self, index: usize) -> Option<&'a Value> {
+        self.values.get(index)
+    }
 }
 
 impl Cif {
@@ -110,7 +115,7 @@ impl DataBlock {
 }
 
 impl Loop {
-    fn tag_index(&self, tag: &str) -> Option<usize> {
+    pub fn tag_index(&self, tag: &str) -> Option<usize> {
         self.tags.iter().position(|t| t.eq_ignore_ascii_case(tag))
     }
 

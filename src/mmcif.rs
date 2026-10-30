@@ -8,7 +8,7 @@ use crate::element::Element;
 use crate::frame::Frame;
 use crate::geometry::Point3;
 use crate::structure::{Atom, Entity, EntityInstance, EntityKind, PolymerKind, Residue, Structure};
-use crate::{Cif, Row, Value};
+use crate::{Cif, Loop, Row, Value};
 
 // Entries in first-insertion order. Fields are private because `indices` must keep pointing into
 // `entries`.
@@ -53,21 +53,40 @@ pub enum MmCifError {
     MissingAtom { atom: usize, model: i64 },
 }
 
-fn field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<T>) -> Result<T, MmCifError> {
-    match row.get(tag) {
-        None => Err(MmCifError::MissingField(tag)),
-        Some(v) => cast(v).ok_or(MmCifError::WrongType(tag)),
+// A tag's position in its category, looked up once before reading the rows: searching every row's
+// tags by name was most of the time spent reading `_atom_site`. A missing tag stays an error per
+// row, so an absent category (no tags, no rows) still reads as empty.
+#[derive(Clone, Copy)]
+struct Column {
+    tag: &'static str,
+    index: Option<usize>,
+}
+
+impl Column {
+    fn new(category: &Loop, tag: &'static str) -> Self {
+        Self { tag, index: category.tag_index(tag) }
+    }
+
+    fn get<'a>(&self, row: &Row<'a>) -> Option<&'a Value> {
+        row.at(self.index?)
+    }
+}
+
+fn field<'a, T>(row: &Row<'a>, column: Column, cast: fn(&'a Value) -> Option<T>) -> Result<T, MmCifError> {
+    match column.get(row) {
+        None => Err(MmCifError::MissingField(column.tag)),
+        Some(v) => cast(v).ok_or(MmCifError::WrongType(column.tag)),
     }
 }
 
 /// Like `field`, but a CIF `.`/`?` (inapplicable/unknown) is `Ok(None)` rather than
 /// an error — e.g. `_struct_conn` partner seq_id, which is inapplicable for
 /// non-polymer partners (a bound ion has no sequence position).
-fn optional_field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<T>) -> Result<Option<T>, MmCifError> {
-    match row.get(tag) {
-        None => Err(MmCifError::MissingField(tag)),
+fn optional_field<'a, T>(row: &Row<'a>, column: Column, cast: fn(&'a Value) -> Option<T>) -> Result<Option<T>, MmCifError> {
+    match column.get(row) {
+        None => Err(MmCifError::MissingField(column.tag)),
         Some(Value::Inapplicable) | Some(Value::Unknown) => Ok(None),
-        Some(v) => cast(v).map(Some).ok_or(MmCifError::WrongType(tag)),
+        Some(v) => cast(v).map(Some).ok_or(MmCifError::WrongType(column.tag)),
     }
 }
 
@@ -183,44 +202,70 @@ impl MmCIF {
         let block = cif.blocks.into_iter().next().ok_or(MmCifError::NoDataBlock)?;
 
         let mut polymer_kinds = HashMap::new();
-        for row in block.category("_entity_poly").iter() {
-            let id = field(&row, "_entity_poly.entity_id", Value::as_int)? as u8;
-            polymer_kinds.insert(id, field(&row, "_entity_poly.type", polymer_kind)?);
+        let rows = block.category("_entity_poly");
+        let [entity_id, kind] = ["_entity_poly.entity_id", "_entity_poly.type"].map(|tag| Column::new(&rows, tag));
+        for row in rows.iter() {
+            let id = field(&row, entity_id, Value::as_int)? as u8;
+            polymer_kinds.insert(id, field(&row, kind, polymer_kind)?);
         }
 
         let mut entities = OrderedMap::new();
-        for row in block.category("_entity").iter() {
-            let id = field(&row, "_entity.id", Value::as_int)? as u8;
-            let kind = match row.get("_entity.type") {
-                None => return Err(MmCifError::MissingField("_entity.type")),
+        let rows = block.category("_entity");
+        let [id, kind, description] = ["_entity.id", "_entity.type", "_entity.pdbx_description"].map(|tag| Column::new(&rows, tag));
+        for row in rows.iter() {
+            let id = field(&row, id, Value::as_int)? as u8;
+            let kind = match kind.get(&row) {
+                None => return Err(MmCifError::MissingField(kind.tag)),
                 // A polymer without an `_entity_poly` row has no kind, so it fails here too.
-                Some(v) => entity_kind(v, polymer_kinds.get(&id).copied()).ok_or(MmCifError::WrongType("_entity.type"))?,
+                Some(v) => entity_kind(v, polymer_kinds.get(&id).copied()).ok_or(MmCifError::WrongType(kind.tag))?,
             };
-            let entity = Entity { kind, name: field(&row, "_entity.pdbx_description", string)? };
+            let entity = Entity { kind, name: field(&row, description, string)? };
             entities.get_or_insert_with(id, || entity);
         }
 
+        // Each value below shadows the column it is read from.
         let mut instances = OrderedMap::new();
-        for row in block.category("_atom_site").iter() {
-            let label_asym_id = field(&row, "_atom_site.label_asym_id", string)?;
-            let label_entity_id = field(&row, "_atom_site.label_entity_id", Value::as_int)? as u8;
-            let auth_asym_id = field(&row, "_atom_site.auth_asym_id", code)?;
-            let auth_seq_id = field(&row, "_atom_site.auth_seq_id", Value::as_int)?;
-            let pdbx_ins_code = optional_field(&row, "_atom_site.pdbx_PDB_ins_code", code)?;
-            let label_comp_id = field(&row, "_atom_site.label_comp_id", string)?;
-            let label_atom_id = field(&row, "_atom_site.label_atom_id", string)?;
-            let label_seq_id = optional_field(&row, "_atom_site.label_seq_id", Value::as_int)?;
+        let rows = block.category("_atom_site");
+        let [label_asym_id, label_entity_id, auth_asym_id, auth_seq_id, pdbx_ins_code, label_comp_id, label_atom_id, label_seq_id, type_symbol, label_alt_id, cartn_x, cartn_y, cartn_z, occupancy, b_factor, model] =
+            [
+                "_atom_site.label_asym_id",
+                "_atom_site.label_entity_id",
+                "_atom_site.auth_asym_id",
+                "_atom_site.auth_seq_id",
+                "_atom_site.pdbx_PDB_ins_code",
+                "_atom_site.label_comp_id",
+                "_atom_site.label_atom_id",
+                "_atom_site.label_seq_id",
+                "_atom_site.type_symbol",
+                "_atom_site.label_alt_id",
+                "_atom_site.Cartn_x",
+                "_atom_site.Cartn_y",
+                "_atom_site.Cartn_z",
+                "_atom_site.occupancy",
+                "_atom_site.B_iso_or_equiv",
+                "_atom_site.pdbx_PDB_model_num",
+            ]
+            .map(|tag| Column::new(&rows, tag));
+        for row in rows.iter() {
+            let label_asym_id = field(&row, label_asym_id, string)?;
+            let label_entity_id = field(&row, label_entity_id, Value::as_int)? as u8;
+            let auth_asym_id = field(&row, auth_asym_id, code)?;
+            let auth_seq_id = field(&row, auth_seq_id, Value::as_int)?;
+            let pdbx_ins_code = optional_field(&row, pdbx_ins_code, code)?;
+            let label_comp_id = field(&row, label_comp_id, string)?;
+            let label_atom_id = field(&row, label_atom_id, string)?;
+            let label_seq_id = optional_field(&row, label_seq_id, Value::as_int)?;
             let atom_site = AtomSite {
-                type_symbol: field(&row, "_atom_site.type_symbol", element)?,
-                label_alt_id: optional_field(&row, "_atom_site.label_alt_id", string)?,
+                type_symbol: field(&row, type_symbol, element)?,
+                label_alt_id: optional_field(&row, label_alt_id, string)?,
                 position: Point3::new(
-                    field(&row, "_atom_site.Cartn_x", Value::as_float)?,
-                    field(&row, "_atom_site.Cartn_y", Value::as_float)?,
-                    field(&row, "_atom_site.Cartn_z", Value::as_float)?,
+                    field(&row, cartn_x, Value::as_float)?,
+                    field(&row, cartn_y, Value::as_float)?,
+                    field(&row, cartn_z, Value::as_float)?,
                 ),
-                occupancy: field(&row, "_atom_site.occupancy", Value::as_float)? as f32,
-                b_factor: field(&row, "_atom_site.B_iso_or_equiv", Value::as_float)? as f32,
-                model: field(&row, "_atom_site.pdbx_PDB_model_num", Value::as_int)?,
+                occupancy: field(&row, occupancy, Value::as_float)? as f32,
+                b_factor: field(&row, b_factor, Value::as_float)? as f32,
+                model: field(&row, model, Value::as_int)?,
             };
             let instance = instances.get_or_insert_with(label_asym_id, || InstanceRows {
                 entity_id: label_entity_id,
@@ -242,12 +287,21 @@ impl MmCIF {
         }
 
         let mut chem_comp_bonds: HashMap<String, Vec<ChemCompBond>> = HashMap::new();
-        for row in block.category("_chem_comp_bond").iter() {
-            chem_comp_bonds.entry(field(&row, "_chem_comp_bond.comp_id", string)?).or_default().push(ChemCompBond {
-                atom_1: field(&row, "_chem_comp_bond.atom_id_1", string)?,
-                atom_2: field(&row, "_chem_comp_bond.atom_id_2", string)?,
-                value_order: field(&row, "_chem_comp_bond.value_order", bond_order)?,
-                aromatic_flag: field(&row, "_chem_comp_bond.pdbx_aromatic_flag", flag)?,
+        let rows = block.category("_chem_comp_bond");
+        let [comp_id, atom_id_1, atom_id_2, value_order, aromatic_flag] = [
+            "_chem_comp_bond.comp_id",
+            "_chem_comp_bond.atom_id_1",
+            "_chem_comp_bond.atom_id_2",
+            "_chem_comp_bond.value_order",
+            "_chem_comp_bond.pdbx_aromatic_flag",
+        ]
+        .map(|tag| Column::new(&rows, tag));
+        for row in rows.iter() {
+            chem_comp_bonds.entry(field(&row, comp_id, string)?).or_default().push(ChemCompBond {
+                atom_1: field(&row, atom_id_1, string)?,
+                atom_2: field(&row, atom_id_2, string)?,
+                value_order: field(&row, value_order, bond_order)?,
+                aromatic_flag: field(&row, aromatic_flag, flag)?,
             });
         }
 

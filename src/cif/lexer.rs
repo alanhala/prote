@@ -3,6 +3,33 @@ const HT: char = '\t';
 const LF: char = '\n';
 const CR: char = '\r';
 
+const fn is_ordinary_char(c: u8) -> bool {
+    matches!(c,
+        b'!' | b'%' | b'&' | b'(' | b')' | b'*' | b'+' | b',' | b'-' | b'.' | b'/'
+      | b'0'..=b'9'
+      | b':' | b'<' | b'=' | b'>' | b'?' | b'@'
+      | b'A'..=b'Z'
+      | b'\\' | b'^' | b'`'
+      | b'a'..=b'z'
+      | b'{' | b'|' | b'}' | b'~'
+    )
+}
+
+const fn is_non_blank_char(c: u8) -> bool {
+    is_ordinary_char(c) || matches!(c, b'"' | b'#' | b'$' | b'\'' | b'_' | b';' | b'[' | b']')
+}
+
+// `is_non_blank_char` for every byte, so scanning a token is one lookup per byte.
+const NON_BLANK: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut b = 0;
+    while b < 256 {
+        table[b] = is_non_blank_char(b as u8);
+        b += 1;
+    }
+    table
+};
+
 #[derive(Debug, Clone, Copy)]
 pub struct Token<'a> {
     pub lexeme: &'a str,
@@ -94,20 +121,10 @@ impl<'a> Lexer<'a> {
         None
     }
 
-    fn is_ordinary_char(c: char) -> bool {
-        matches!(c,
-            '!' | '%' | '&' | '(' | ')' | '*' | '+' | ',' | '-' | '.' | '/'
-          | '0'..='9'
-          | ':' | '<' | '=' | '>' | '?' | '@'
-          | 'A'..='Z'
-          | '\\' | '^' | '`'
-          | 'a'..='z'
-          | '{' | '|' | '}' | '~'
-        )
-    }
-
-    fn is_non_blank_char(c: char) -> bool {
-        Self::is_ordinary_char(c) || matches!(c, '"' | '#' | '$' | '\'' | '_' | ';' | '[' | ']')
+    // Length of the run of non-blank characters `s` starts with. Every non-blank character is ASCII,
+    // so this scans bytes, and the run ends at the first byte of any non-ASCII character.
+    fn non_blank_len(s: &str) -> usize {
+        s.bytes().position(|b| !NON_BLANK[b as usize]).unwrap_or(s.len())
     }
 
     fn at_line_start(&self, c_at: usize) -> bool {
@@ -144,9 +161,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_tag(&mut self, c_onwards: &'a str, c_at: usize) -> Result<Token<'a>, LexError> {
-        let end = c_onwards
-            .find(|ch| !Self::is_non_blank_char(ch))
-            .unwrap_or(c_onwards.len());
+        let end = Self::non_blank_len(c_onwards);
         if end == 1 {
             return Err(LexError::EmptyTag { at: c_at });
         }
@@ -171,10 +186,20 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_value(&mut self, c_onwards: &'a str, c_at: usize) -> Result<Token<'a>, LexError> {
-        let end = c_onwards
-            .find(|ch: char| !Self::is_non_blank_char(ch))
-            .unwrap_or(c_onwards.len());
+        let end = Self::non_blank_len(c_onwards);
         let lexeme = self.take(c_onwards, c_at, end);
+        let kind = match lexeme.as_bytes().first() {
+            // Fast paths for most values. Only `.`, `?` and words starting with d, g, l or s (any case)
+            // can be special, so everything else skips those checks; `.5` is a number that goes the
+            // slow way.
+            Some(b'0'..=b'9' | b'+' | b'-') => Self::classify_number(lexeme).unwrap_or(TokenKind::UnquotedString),
+            Some(c) if !matches!(c.to_ascii_lowercase(), b'.' | b'?' | b'd' | b'g' | b'l' | b's') => TokenKind::UnquotedString,
+            _ => Self::classify_word(lexeme, c_at)?,
+        };
+        Ok(Token { lexeme, kind })
+    }
+
+    fn classify_word(lexeme: &str, c_at: usize) -> Result<TokenKind, LexError> {
         let kind = if lexeme.eq_ignore_ascii_case("loop_") {
             TokenKind::Loop
         } else if lexeme.eq_ignore_ascii_case("stop_") {
@@ -198,7 +223,7 @@ impl<'a> Lexer<'a> {
         } else {
             TokenKind::UnquotedString
         };
-        Ok(Token { lexeme, kind })
+        Ok(kind)
     }
 }
 
@@ -207,15 +232,20 @@ impl<'a> Iterator for Lexer<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let mut chars = self.rest.chars();
-            let c = chars.next()?;
-            let c_at = self.byte;
-            let c_onwards = self.rest;
-            self.rest = chars.as_str();
-            self.byte += c.len_utf8();
+            // Whitespace is ASCII, so skipping it by bytes leaves `rest` on a char boundary.
+            let Some(blank) = self.rest.bytes().position(|b| !matches!(b as char, HT | SP | LF | CR)) else {
+                self.byte += self.rest.len();
+                self.rest = "";
+                return None;
+            };
+            let c_at = self.byte + blank;
+            let c_onwards = &self.rest[blank..];
+            let c = c_onwards.chars().next()?;
+            // Past `c`, so a token that fails to lex doesn't stop the lexer on the same error.
+            self.rest = &c_onwards[c.len_utf8()..];
+            self.byte = c_at + c.len_utf8();
 
             match c {
-                HT | SP | LF | CR => continue,
                 '#' => self.skip_comment(c_onwards, c_at),
                 '\'' | '"' => return Some(self.lex_quoted(c, c_onwards, c_at)),
                 '_' => return Some(self.lex_tag(c_onwards, c_at)),
