@@ -1,13 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
-    bond::{Bond, ResidueTemplateBond},
+    bond::{Bond, Link, LinkType, ResidueTemplateBond},
     bond_order::BondOrder,
     graph::Graph,
-    structure::{EntityKind, PolymerKind, Residue, Structure},
+    structure::{self, EntityKind, PolymerKind, Residue, Structure},
 };
 
-pub fn new(structure: &Structure, templates: &HashMap<String, Vec<ResidueTemplateBond>>) -> Graph<Bond> {
+pub fn new(structure: &Structure, templates: &HashMap<String, Vec<ResidueTemplateBond>>, links: &[Link]) -> Graph<Bond> {
     let mut bonds = vec![];
     let atom_named = |residue: &Residue, name: &str| residue.atoms.clone().find(|&atom| structure.atoms[atom].name == name);
     for instance in &structure.instances {
@@ -32,7 +32,33 @@ pub fn new(structure: &Structure, templates: &HashMap<String, Vec<ResidueTemplat
             }
         }
     }
+    // A link can repeat a bond the backbone rule already made, such as the peptide bond next to a non-standard residue.
+    let bonded: HashSet<(usize, usize)> = bonds.iter().map(|bond| atom_pair(bond.atom_1, bond.atom_2)).collect();
+    for link in links {
+        if bonded.contains(&atom_pair(link.atom_1, link.atom_2)) {
+            continue;
+        }
+        if let Some(order) = link_order(link) {
+            bonds.push(Bond { atom_1: link.atom_1, atom_2: link.atom_2, order, aromatic: false });
+        }
+    }
     Graph::new(structure.atoms.len(), bonds)
+}
+
+pub fn valence_check(structure: Structure) -> bool {}
+
+// None for links that aren't covalent bonds, and for covalent links whose order is still unknown.
+fn link_order(link: &Link) -> Option<BondOrder> {
+    match link.link_type {
+        // A disulfide is always a single S–S bond.
+        LinkType::Disulfide => Some(link.order.unwrap_or(BondOrder::Single)),
+        LinkType::Covalent => link.order,
+        LinkType::MetalCoordination | LinkType::HydrogenBond => None,
+    }
+}
+
+fn atom_pair(atom_1: usize, atom_2: usize) -> (usize, usize) {
+    (atom_1.min(atom_2), atom_1.max(atom_2))
 }
 
 // Polymers link consecutive residues through fixed atoms: peptides C(i)–N(i+1), nucleic acids O3'(i)–P(i+1).

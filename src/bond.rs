@@ -7,6 +7,22 @@ pub struct ResidueTemplateBond {
     pub aromatic: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LinkType {
+    Covalent,
+    Disulfide,
+    MetalCoordination,
+    HydrogenBond,
+}
+
+#[derive(Debug)]
+pub struct Link {
+    pub atom_1: usize,
+    pub atom_2: usize,
+    pub link_type: LinkType,
+    pub order: Option<BondOrder>,
+}
+
 #[derive(Debug)]
 pub struct Bond {
     pub atom_1: usize,

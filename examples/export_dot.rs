@@ -9,10 +9,8 @@ use std::{collections::BTreeSet, fs, path::Path};
 use prote::{
     bond::Bond,
     bond_order::BondOrder,
-    conformer::Conformer,
     contact::Contact,
     element::Element,
-    graph,
     mmcif::MmCIF,
     selection::Selection,
     spatial_index::SpatialIndex,
@@ -40,7 +38,7 @@ fn main() {
         for atom in atoms.clone() {
             dot += &format!("  {atom} [label=\"{}\", fillcolor=\"{}\"];\n", atom_label(&structure, atom), color(structure.atoms[atom].element));
         }
-        for bond in structure.bonds.iter().filter(|bond| atoms.contains(&bond.atom_1) && atoms.contains(&bond.atom_2)) {
+        for bond in structure.bonds.edges().iter().filter(|bond| atoms.contains(&bond.atom_1) && atoms.contains(&bond.atom_2)) {
             let between_residues = residue_of(&structure, bond.atom_1) != residue_of(&structure, bond.atom_2);
             dot += &format!(
                 "  {} -- {} [label=\"{}\", color=\"{}\"{}];\n",

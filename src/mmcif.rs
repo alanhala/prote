@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::hash::Hash;
 use std::vec;
 
-use crate::bond::ResidueTemplateBond;
+use crate::bond::{Link, LinkType, ResidueTemplateBond};
 use crate::bond_order::BondOrder;
 use crate::element::Element;
 use crate::frame::Frame;
@@ -43,6 +43,11 @@ impl<K: Eq + Hash + Clone, V> OrderedMap<K, V> {
     pub fn index_of(&self, key: &K) -> Option<usize> {
         self.indices.get(key).copied()
     }
+
+    pub fn get_full(&self, key: &K) -> Option<(usize, &V)> {
+        let index = *self.indices.get(key)?;
+        Some((index, &self.entries[index].1))
+    }
 }
 
 #[derive(Debug)]
@@ -70,6 +75,14 @@ fn optional_field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -
         Some(Value::Inapplicable) | Some(Value::Unknown) => Ok(None),
         Some(v) => cast(v).map(Some).ok_or(MmCifError::WrongType(tag)),
     }
+}
+
+// For items the dictionary doesn't require: a column the file leaves out reads like `?`.
+fn optional_column<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<T>) -> Result<Option<T>, MmCifError> {
+    if row.get(tag).is_none() {
+        return Ok(None);
+    }
+    optional_field(row, tag, cast)
 }
 
 fn string(v: &Value) -> Option<String> {
@@ -146,6 +159,24 @@ pub struct ChemCompBond {
 }
 
 #[derive(Debug)]
+pub struct StructConn {
+    pub conn_type_id: String,
+    pub partner_1: ConnPartner,
+    pub partner_2: ConnPartner,
+    pub value_order: Option<BondOrder>,
+}
+
+#[derive(Debug)]
+pub struct ConnPartner {
+    pub label_asym_id: String,
+    pub label_comp_id: String,
+    pub label_atom_id: Option<String>,
+    pub auth_seq_id: Option<i64>,
+    pub pdbx_ins_code: Option<String>,
+    pub symmetry: Option<String>,
+}
+
+#[derive(Debug)]
 pub struct AtomSite {
     pub type_symbol: Element,
     pub label_alt_id: Option<String>,
@@ -177,6 +208,7 @@ pub struct MmCIF {
     pub entities: OrderedMap<u8, Entity>,
     pub instances: OrderedMap<String, InstanceRows>,
     pub chem_comp_bonds: HashMap<String, Vec<ChemCompBond>>,
+    pub struct_conns: Vec<StructConn>,
 }
 
 impl MmCIF {
@@ -252,7 +284,38 @@ impl MmCIF {
             });
         }
 
-        Ok(Self { entities, instances, chem_comp_bonds })
+        let mut struct_conns = vec![];
+        for row in block.category("_struct_conn").iter() {
+            struct_conns.push(StructConn {
+                // A `ucode`, so case-insensitive: lowercase it once here.
+                conn_type_id: field(&row, "_struct_conn.conn_type_id", string)?.to_ascii_lowercase(),
+                partner_1: conn_partner(
+                    &row,
+                    [
+                        "_struct_conn.ptnr1_label_asym_id",
+                        "_struct_conn.ptnr1_label_comp_id",
+                        "_struct_conn.ptnr1_label_atom_id",
+                        "_struct_conn.ptnr1_auth_seq_id",
+                        "_struct_conn.pdbx_ptnr1_PDB_ins_code",
+                        "_struct_conn.ptnr1_symmetry",
+                    ],
+                )?,
+                partner_2: conn_partner(
+                    &row,
+                    [
+                        "_struct_conn.ptnr2_label_asym_id",
+                        "_struct_conn.ptnr2_label_comp_id",
+                        "_struct_conn.ptnr2_label_atom_id",
+                        "_struct_conn.ptnr2_auth_seq_id",
+                        "_struct_conn.pdbx_ptnr2_PDB_ins_code",
+                        "_struct_conn.ptnr2_symmetry",
+                    ],
+                )?,
+                value_order: optional_column(&row, "_struct_conn.pdbx_value_order", bond_order)?,
+            });
+        }
+
+        Ok(Self { entities, instances, chem_comp_bonds, struct_conns })
     }
 
     pub fn build_structure(&self) -> Result<(Structure, Vec<Frame>), MmCifError> {
@@ -275,10 +338,67 @@ impl MmCIF {
         }
         let frames = build_frames(&atom_rows)?;
         let templates = build_template_bonds(&self.chem_comp_bonds);
+
         let mut structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonds: Graph::empty() };
-        structure.bonds = bond_graph::new(&structure, &templates);
+        let links = build_links(&self.struct_conns, &structure, &self.instances);
+        structure.bonds = bond_graph::new(&structure, &templates, &links);
         Ok((structure, frames))
     }
+}
+
+// Links apply to the whole structure, so one that holds in a single altloc (`pdbx_ptnr*_label_alt_id`)
+// also appears in frames where its atoms are apart.
+fn build_links(struct_conns: &[StructConn], structure: &Structure, instance_rows: &OrderedMap<String, InstanceRows>) -> Vec<Link> {
+    let mut links = vec![];
+    for struct_conn in struct_conns {
+        let Some(link_type) = link_type(&struct_conn.conn_type_id) else {
+            continue;
+        };
+        // A partner in another copy of the crystal isn't in our coordinates. No code means the stored copy.
+        let in_stored_copy = |partner: &ConnPartner| partner.symmetry.as_deref().is_none_or(|symmetry| symmetry == "1_555");
+        if !in_stored_copy(&struct_conn.partner_1) || !in_stored_copy(&struct_conn.partner_2) {
+            continue;
+        }
+        let atom_1 = atom_index_from_partner(&struct_conn.partner_1, structure, instance_rows);
+        let atom_2 = atom_index_from_partner(&struct_conn.partner_2, structure, instance_rows);
+        if let (Some(atom_1), Some(atom_2)) = (atom_1, atom_2) {
+            links.push(Link { atom_1, atom_2, link_type, order: struct_conn.value_order });
+        }
+    }
+    links
+}
+
+fn atom_index_from_partner(partner: &ConnPartner, structure: &Structure, instance_rows: &OrderedMap<String, InstanceRows>) -> Option<usize> {
+    let (instance, instance_rows) = instance_rows.get_full(&partner.label_asym_id)?;
+    let (residue, residue_rows) = instance_rows.residues.get_full(&(partner.auth_seq_id?, partner.pdbx_ins_code.clone()))?;
+    // Microheterogeneity keeps one residue type per position; a link to the dropped one has no atom.
+    if residue_rows.name != partner.label_comp_id {
+        return None;
+    }
+    let atom = residue_rows.atoms.index_of(partner.label_atom_id.as_ref()?)?;
+    Some(structure.residues[structure.instances[instance].residues.start + residue].atoms.start + atom)
+}
+
+// The dictionary allows only these four; anything else is skipped rather than failing the file.
+fn link_type(conn_type_id: &str) -> Option<LinkType> {
+    match conn_type_id {
+        "covale" => Some(LinkType::Covalent),
+        "disulf" => Some(LinkType::Disulfide),
+        "metalc" => Some(LinkType::MetalCoordination),
+        "hydrog" => Some(LinkType::HydrogenBond),
+        _ => None,
+    }
+}
+
+fn conn_partner(row: &Row, [asym_id, comp_id, atom_id, seq_id, ins_code, symmetry]: [&'static str; 6]) -> Result<ConnPartner, MmCifError> {
+    Ok(ConnPartner {
+        label_asym_id: field(row, asym_id, string)?,
+        label_comp_id: field(row, comp_id, string)?,
+        label_atom_id: optional_column(row, atom_id, string)?,
+        auth_seq_id: optional_column(row, seq_id, Value::as_int)?,
+        pdbx_ins_code: optional_column(row, ins_code, code)?,
+        symmetry: optional_column(row, symmetry, string)?,
+    })
 }
 
 fn build_template_bonds(chem_comp_bonds: &HashMap<String, Vec<ChemCompBond>>) -> HashMap<String, Vec<ResidueTemplateBond>> {
