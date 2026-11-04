@@ -14,7 +14,7 @@ impl Contact {
 
     pub fn contacts(structure: &Structure, index: &SpatialIndex, query: &Selection, search: &Selection) -> Vec<Contact> {
         index
-            .pairs_within(query, search, |atom_id| structure.atoms[atom_id].element.van_der_waals_radius())
+            .pairs_within(query, search, |atom_id| structure.atoms[atom_id].element.van_der_waals_radius().unwrap())
             .filter(|&(atom_1, atom_2, _)| !structure.bonds.within_steps(atom_1, atom_2, 3))
             .map(|(atom_1, atom_2, distance)| Contact::new(atom_1, atom_2, distance))
             .collect()

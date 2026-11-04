@@ -1,8 +1,11 @@
-use crate::{bond_order::BondOrder, frame::Frame, graph::Edge};
+use crate::{bond_order::BondOrder, element::Element, frame::Frame, graph::Edge};
 
+#[derive(Debug)]
 pub struct ResidueTemplateBond {
     pub atom_name_1: String,
+    pub element_1: Element,
     pub atom_name_2: String,
+    pub element_2: Element,
     pub order: BondOrder,
     pub aromatic: bool,
 }

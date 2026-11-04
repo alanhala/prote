@@ -9,6 +9,7 @@ use crate::frame::Frame;
 use crate::geometry::Point3;
 use crate::graph::Graph;
 use crate::structure::{Atom, Entity, EntityInstance, EntityKind, PolymerKind, Residue, Structure};
+use crate::bond_graph::LinkIssue;
 use crate::{bond_graph, Cif, Row, Value};
 
 // Entries in first-insertion order. Fields are private because `indices` must keep pointing into
@@ -57,6 +58,8 @@ pub enum MmCifError {
     WrongType(&'static str),
     UnknownEntity(u8),
     MissingAtom { atom: usize, model: i64 },
+    UnknownTemplateAtom { residue: String, atom: String },
+    UnsupportedLinks(Vec<LinkIssue>),
 }
 
 fn field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<T>) -> Result<T, MmCifError> {
@@ -126,8 +129,6 @@ fn bond_order(v: &Value) -> Option<BondOrder> {
         "sing" => Some(BondOrder::Single),
         "doub" => Some(BondOrder::Double),
         "trip" => Some(BondOrder::Triple),
-        "arom" => Some(BondOrder::Aromatic),
-        "pi" => Some(BondOrder::Pi),
         _ => None,
     }
 }
@@ -207,6 +208,8 @@ pub struct ResidueRows {
 pub struct MmCIF {
     pub entities: OrderedMap<u8, Entity>,
     pub instances: OrderedMap<String, InstanceRows>,
+    // Keyed by comp_id, then atom_id.
+    pub chem_comp_atoms: HashMap<String, HashMap<String, Element>>,
     pub chem_comp_bonds: HashMap<String, Vec<ChemCompBond>>,
     pub struct_conns: Vec<StructConn>,
 }
@@ -274,6 +277,14 @@ impl MmCIF {
             residue.atoms.get_or_insert_with(label_atom_id, Vec::new).push(atom_site);
         }
 
+        let mut chem_comp_atoms: HashMap<String, HashMap<String, Element>> = HashMap::new();
+        for row in block.category("_chem_comp_atom").iter() {
+            chem_comp_atoms
+                .entry(field(&row, "_chem_comp_atom.comp_id", string)?)
+                .or_default()
+                .insert(field(&row, "_chem_comp_atom.atom_id", string)?, field(&row, "_chem_comp_atom.type_symbol", element)?);
+        }
+
         let mut chem_comp_bonds: HashMap<String, Vec<ChemCompBond>> = HashMap::new();
         for row in block.category("_chem_comp_bond").iter() {
             chem_comp_bonds.entry(field(&row, "_chem_comp_bond.comp_id", string)?).or_default().push(ChemCompBond {
@@ -315,7 +326,7 @@ impl MmCIF {
             });
         }
 
-        Ok(Self { entities, instances, chem_comp_bonds, struct_conns })
+        Ok(Self { entities, instances, chem_comp_atoms, chem_comp_bonds, struct_conns })
     }
 
     pub fn build_structure(&self) -> Result<(Structure, Vec<Frame>), MmCifError> {
@@ -337,11 +348,11 @@ impl MmCIF {
             instances.push(EntityInstance { id: id.clone(), chain: instance.chain.clone(), entity, residues: residue_start..residues.len() });
         }
         let frames = build_frames(&atom_rows)?;
-        let templates = build_template_bonds(&self.chem_comp_bonds);
+        let templates = build_template_bonds(&self.chem_comp_bonds, &self.chem_comp_atoms)?;
 
         let mut structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonds: Graph::empty() };
         let links = build_links(&self.struct_conns, &structure, &self.instances);
-        structure.bonds = bond_graph::new(&structure, &templates, &links);
+        structure.bonds = bond_graph::new(&structure, &templates, &links).map_err(MmCifError::UnsupportedLinks)?;
         Ok((structure, frames))
     }
 }
@@ -401,19 +412,32 @@ fn conn_partner(row: &Row, [asym_id, comp_id, atom_id, seq_id, ins_code, symmetr
     })
 }
 
-fn build_template_bonds(chem_comp_bonds: &HashMap<String, Vec<ChemCompBond>>) -> HashMap<String, Vec<ResidueTemplateBond>> {
+// `_chem_comp_bond` names its atoms; their elements come from `_chem_comp_atom`.
+fn build_template_bonds(
+    chem_comp_bonds: &HashMap<String, Vec<ChemCompBond>>,
+    chem_comp_atoms: &HashMap<String, HashMap<String, Element>>,
+) -> Result<HashMap<String, Vec<ResidueTemplateBond>>, MmCifError> {
     let mut templates: HashMap<String, Vec<ResidueTemplateBond>> = HashMap::new();
     for (residue_name, bonds) in chem_comp_bonds {
+        let element = |atom: &str| {
+            chem_comp_atoms
+                .get(residue_name)
+                .and_then(|atoms| atoms.get(atom))
+                .copied()
+                .ok_or_else(|| MmCifError::UnknownTemplateAtom { residue: residue_name.clone(), atom: atom.to_string() })
+        };
         for bond in bonds {
             templates.entry(residue_name.to_string()).or_default().push(ResidueTemplateBond {
                 atom_name_1: bond.atom_1.to_string(),
+                element_1: element(&bond.atom_1)?,
                 atom_name_2: bond.atom_2.to_string(),
+                element_2: element(&bond.atom_2)?,
                 aromatic: bond.aromatic_flag,
                 order: bond.value_order,
             });
         }
     }
-    templates
+    Ok(templates)
 }
 
 // One frame per (model, altloc). Altlocs are local to a few residues, so an atom without a row for

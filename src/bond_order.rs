@@ -4,8 +4,6 @@ pub enum BondOrder {
     Double,
     Triple,
     Quadruple,
-    Pi,
-    Aromatic,
 }
 
 impl BondOrder {
@@ -15,7 +13,6 @@ impl BondOrder {
             BondOrder::Double => 2,
             BondOrder::Triple => 3,
             BondOrder::Quadruple => 4,
-            BondOrder::Pi | BondOrder::Aromatic => 1,
         }
     }
 
