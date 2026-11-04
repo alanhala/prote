@@ -15,6 +15,10 @@ impl Structure {
     pub fn residue_of(&self, atom: usize) -> usize {
         self.residues.partition_point(|residue| residue.atoms.end <= atom)
     }
+
+    pub fn instance_of(&self, residue: usize) -> usize {
+        self.instances.partition_point(|instance| instance.residues.end <= residue)
+    }
 }
 
 #[derive(Debug)]

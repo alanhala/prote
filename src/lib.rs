@@ -4,6 +4,7 @@ pub mod bond_order;
 pub mod cif;
 pub mod conformer;
 pub mod contact;
+pub mod dot;
 pub mod element;
 pub mod frame;
 pub mod geometry;
