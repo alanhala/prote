@@ -18,9 +18,14 @@ impl Edge for (usize, usize) {
     }
 }
 
-struct Ring<E> {
-    nodes: Vec<usize>,
-    edges: Mask<E>,
+struct CandidateRing<E> {
+    pub nodes: Vec<usize>,
+    pub edges: Mask<E>,
+}
+
+pub struct Ring {
+    pub nodes: Vec<usize>,
+    pub edges: Vec<usize>,
 }
 
 struct ShortestPathTree {
@@ -113,11 +118,11 @@ impl<E: Edge> Graph<E> {
         by_distance
     }
 
-    pub fn rings(&self) -> Vec<Vec<usize>> {
+    pub fn rings(&self) -> Vec<Ring> {
         self.rings_where(|_| true)
     }
 
-    pub fn rings_where(&self, keep_edge: impl Fn(usize) -> bool) -> Vec<Vec<usize>> {
+    pub fn rings_where(&self, keep_edge: impl Fn(usize) -> bool) -> Vec<Ring> {
         let bridges = self.bridges_where(&keep_edge);
         let components: Vec<Component> = self
             .components_where(|edge| keep_edge(edge) && !bridges.contains(edge))
@@ -131,7 +136,7 @@ impl<E: Edge> Graph<E> {
                 local_index[node] = i;
             }
         }
-        let mut rings: Vec<Vec<usize>> = vec![];
+        let mut rings = vec![];
         for component in &components {
             let edges: Vec<(usize, usize)> = component
                 .edges
@@ -143,7 +148,10 @@ impl<E: Edge> Graph<E> {
                 .collect();
             let subgraph = Graph::new(component.nodes.len(), edges);
             for ring in subgraph.smallest_rings() {
-                rings.push(ring.iter().map(|&i| component.nodes[i]).collect());
+                rings.push(Ring {
+                    nodes: ring.nodes.iter().map(|&i| component.nodes[i]).collect(),
+                    edges: ring.edges.iter().map(|&j| component.edges[j]).collect(),
+                });
             }
         }
         rings
@@ -238,9 +246,9 @@ impl<E: Edge> Graph<E> {
         from == to || steps > 0 && self.neighbors[from].iter().any(|&(next, _)| self.within_steps(next, to, steps - 1))
     }
 
-    fn smallest_rings(&self) -> Vec<Vec<usize>> {
+    fn smallest_rings(&self) -> Vec<Ring> {
         let k = self.edges.len() - self.neighbors.len() + 1;
-        let mut candidates: Vec<Ring<E>> = self.ring_roots().into_iter().flat_map(|root| self.candidate_rings(root)).collect();
+        let mut candidates: Vec<CandidateRing<E>> = self.ring_roots().into_iter().flat_map(|root| self.candidate_rings(root)).collect();
         // Same-size rings are ordered by their edges too, so duplicates end up next to each other for dedup_by.
         candidates.sort_by_cached_key(|ring| (ring.nodes.len(), ring.edges.indices().collect::<Vec<_>>()));
         candidates.dedup_by(|a, b| a.edges == b.edges);
@@ -251,8 +259,8 @@ impl<E: Edge> Graph<E> {
             if basis.len() == k {
                 break;
             }
-            if basis.insert(candidate.edges) {
-                rings.push(candidate.nodes);
+            if basis.insert(&candidate.edges) {
+                rings.push(Ring { nodes: candidate.nodes, edges: candidate.edges.indices().collect() });
             }
         }
         rings
@@ -268,7 +276,7 @@ impl<E: Edge> Graph<E> {
         }
     }
 
-    fn candidate_rings(&self, root: usize) -> Vec<Ring<E>> {
+    fn candidate_rings(&self, root: usize) -> Vec<CandidateRing<E>> {
         let shortest_path_tree = ShortestPathTree::new(self, root);
         let mut candidates = vec![];
         for (edge_id, edge) in self.edges.iter().enumerate() {
@@ -287,7 +295,7 @@ impl<E: Edge> Graph<E> {
             let mut edges = edges_x;
             edges.extend(edges_y);
             edges.push(edge_id);
-            candidates.push(Ring { nodes, edges: Mask::from_indices(self.edges.len(), edges) });
+            candidates.push(CandidateRing { nodes, edges: Mask::from_indices(self.edges.len(), edges) });
         }
         candidates
     }
@@ -297,17 +305,22 @@ impl<E: Edge> Graph<E> {
 mod tests {
     use super::*;
 
-    fn sorted_rings(graph: &Graph<(usize, usize)>) -> Vec<Vec<usize>> {
-        let mut rings: Vec<Vec<usize>> = graph
-            .smallest_rings()
+    // Each ring's nodes sorted, then the rings sorted: compares which rings were found, not their walk order.
+    fn sorted(rings: Vec<Ring>) -> Vec<Vec<usize>> {
+        let mut rings: Vec<Vec<usize>> = rings
             .into_iter()
-            .map(|mut ring| {
-                ring.sort();
-                ring
+            .map(|ring| {
+                let mut nodes = ring.nodes;
+                nodes.sort();
+                nodes
             })
             .collect();
         rings.sort();
         rings
+    }
+
+    fn sorted_rings(graph: &Graph<(usize, usize)>) -> Vec<Vec<usize>> {
+        sorted(graph.smallest_rings())
     }
 
     #[test]
@@ -322,14 +335,6 @@ mod tests {
         // H2 in docs/bridges_exercise.md: A=0 B=1 C=2 D=3 E=4 F=5 G=6.
         let graph = Graph::new(7, vec![(0, 1), (0, 2), (1, 2), (1, 3), (2, 3), (2, 6), (3, 4), (4, 5), (5, 6)]);
         assert_eq!(sorted_rings(&graph), vec![vec![0, 1, 2], vec![1, 2, 3], vec![2, 3, 4, 5, 6]]);
-    }
-
-    fn sorted(mut rings: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
-        for ring in &mut rings {
-            ring.sort();
-        }
-        rings.sort();
-        rings
     }
 
     #[test]

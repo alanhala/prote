@@ -63,6 +63,12 @@ impl<T> PartialEq for Mask<T> {
     }
 }
 
+impl<T> Clone for Mask<T> {
+    fn clone(&self) -> Self {
+        Self::from_bools(self.selected.clone())
+    }
+}
+
 pub struct XorBasis<T> {
     rows: Vec<Mask<T>>,
 }
@@ -72,8 +78,8 @@ impl<T> XorBasis<T> {
         Self { rows: vec![] }
     }
 
-    pub fn insert(&mut self, mask: Mask<T>) -> bool {
-        let mut leftover = mask;
+    pub fn insert(&mut self, mask: &Mask<T>) -> bool {
+        let mut leftover = mask.clone();
         for row in self.rows.iter() {
             let pivot = row.indices().next().unwrap();
             if leftover.contains(pivot) {

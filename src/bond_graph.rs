@@ -5,6 +5,7 @@ use crate::{
     bond_order::BondOrder,
     element::Element,
     graph::Graph,
+    ring::Ring,
     structure::{EntityKind, PolymerKind, Residue, Structure},
 };
 
@@ -18,8 +19,16 @@ pub fn new(structure: &Structure, templates: &HashMap<String, Vec<ResidueTemplat
     Ok(Graph::new(structure.atoms.len(), bonds))
 }
 
-pub fn rings(bonds: &Graph<Bond>) -> Vec<Vec<usize>> {
-    bonds.rings_where(|edge| !matches!(bonds.edges()[edge].source, BondSource::Disulfide | BondSource::CovalentLink))
+pub fn rings(structure: &Structure) -> Vec<Ring> {
+    structure
+        .bonds
+        .rings_where(|edge| !matches!(structure.bonds.edges()[edge].source, BondSource::Disulfide | BondSource::CovalentLink))
+        .iter()
+        .map(|ring| {
+            let aromatic = ring.edges.iter().all(|&edge| structure.bonds.edges()[edge].aromatic);
+            Ring { atoms: ring.nodes.clone(), aromatic }
+        })
+        .collect()
 }
 
 /// A covalent link whose order we can't infer yet. Each kind is a case to study, not one to guess at.
@@ -251,5 +260,50 @@ fn backbone_link(entity_kind: EntityKind) -> Option<(&'static str, &'static str)
         // No single link we can rely on, so we leave these unlinked rather than guess.
         EntityKind::Polymer(PolymerKind::CyclicPseudoPeptide | PolymerKind::PeptideNucleicAcid | PolymerKind::Other) => None,
         EntityKind::NonPolymer | EntityKind::Branched | EntityKind::Water => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::structure::Atom;
+
+    fn bond(atom_1: usize, atom_2: usize, aromatic: bool, source: BondSource) -> Bond {
+        Bond { atom_1, atom_2, order: BondOrder::Single, aromatic, source }
+    }
+
+    fn structure_with(atom_count: usize, bonds: Vec<Bond>) -> Structure {
+        let atoms = (0..atom_count).map(|_| Atom { element: Element::C, name: "C".to_string() }).collect();
+        Structure { atoms, residues: vec![], instances: vec![], entities: vec![], bonds: Graph::new(atom_count, bonds) }
+    }
+
+    #[test]
+    fn rings_are_aromatic_only_when_every_bond_is() {
+        let mut bonds = vec![];
+        // Benzene-like ring 0..6: every bond aromatic.
+        for i in 0..6 {
+            bonds.push(bond(i, (i + 1) % 6, true, BondSource::Template));
+        }
+        // Five-ring 6..11: aromatic except the last bond, as a check on "every bond".
+        for i in 0..5 {
+            bonds.push(bond(6 + i, 6 + (i + 1) % 5, i < 4, BondSource::Template));
+        }
+        let rings = rings(&structure_with(11, bonds));
+
+        let mut found: Vec<(usize, bool)> = rings.iter().map(|ring| (ring.atoms.len(), ring.aromatic)).collect();
+        found.sort();
+        assert_eq!(found, vec![(5, false), (6, true)]);
+    }
+
+    #[test]
+    fn loops_closed_by_links_are_not_rings() {
+        // Chain 0-1-2-3 closed back to 0 by a disulfide, like Cys22–Cys157 in 3PTB.
+        let bonds = vec![
+            bond(0, 1, false, BondSource::Template),
+            bond(1, 2, false, BondSource::Backbone),
+            bond(2, 3, false, BondSource::Template),
+            bond(3, 0, false, BondSource::Disulfide),
+        ];
+        assert!(rings(&structure_with(4, bonds)).is_empty());
     }
 }
