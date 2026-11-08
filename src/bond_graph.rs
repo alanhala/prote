@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    bond::{Bond, Link, LinkType, ResidueTemplateBond},
+    bond::{Bond, BondSource, Link, LinkType, ResidueTemplateBond},
     bond_order::BondOrder,
     element::Element,
     graph::Graph,
@@ -16,6 +16,10 @@ pub fn new(structure: &Structure, templates: &HashMap<String, Vec<ResidueTemplat
     let link_bonds = link_bonds(structure, templates, &bonds, &backbone_atoms, links)?;
     bonds.extend(link_bonds);
     Ok(Graph::new(structure.atoms.len(), bonds))
+}
+
+pub fn rings(bonds: &Graph<Bond>) -> Vec<Vec<usize>> {
+    bonds.rings_where(|edge| !matches!(bonds.edges()[edge].source, BondSource::Disulfide | BondSource::CovalentLink))
 }
 
 /// A covalent link whose order we can't infer yet. Each kind is a case to study, not one to guess at.
@@ -53,7 +57,7 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
             templates.get(&residue.name).into_iter().flatten().filter_map(move |template| {
                 let atom_1 = atom_named(structure, residue, &template.atom_name_1)?;
                 let atom_2 = atom_named(structure, residue, &template.atom_name_2)?;
-                Some(Bond { atom_1, atom_2, order: template.order, aromatic: template.aromatic })
+                Some(Bond { atom_1, atom_2, order: template.order, aromatic: template.aromatic, source: BondSource::Template })
             })
         })
         .collect()
@@ -72,7 +76,7 @@ fn backbone_bonds(structure: &Structure) -> Vec<Bond> {
                 continue;
             }
             if let (Some(atom_1), Some(atom_2)) = (atom_named(structure, previous, name_1), atom_named(structure, next, name_2)) {
-                bonds.push(Bond { atom_1, atom_2, order: BondOrder::Single, aromatic: false });
+                bonds.push(Bond { atom_1, atom_2, order: BondOrder::Single, aromatic: false, source: BondSource::Backbone });
             }
         }
     }
@@ -100,7 +104,16 @@ fn link_bonds(
     let mut issues = vec![];
     for link in unbonded_links {
         match link_order(structure, templates, backbone_atoms, &covalent_links_at, link) {
-            Ok(Some(order)) => link_bonds.push(Bond { atom_1: link.atom_1, atom_2: link.atom_2, order, aromatic: false }),
+            Ok(Some(order)) => {
+                let source = match link.link_type {
+                    LinkType::Disulfide => BondSource::Disulfide,
+                    LinkType::Covalent => BondSource::CovalentLink,
+                    LinkType::MetalCoordination | LinkType::HydrogenBond => {
+                        unreachable!("link_order gives no order for metal or hydrogen-bond links, so they never become bonds")
+                    }
+                };
+                link_bonds.push(Bond { atom_1: link.atom_1, atom_2: link.atom_2, order, aromatic: false, source });
+            }
             Ok(None) => {}
             Err(kind) => issues.push(LinkIssue { atom_1: link.atom_1, atom_2: link.atom_2, kind }),
         }

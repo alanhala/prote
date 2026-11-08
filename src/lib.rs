@@ -9,6 +9,7 @@ pub mod element;
 pub mod frame;
 pub mod geometry;
 pub mod kdtree;
+pub mod mask;
 pub mod mmcif;
 pub mod ring;
 pub mod spatial_index;

@@ -28,8 +28,8 @@ impl<'a> SpatialIndex<'a> {
         search: &'s Selection,
         radius: impl Fn(usize) -> f64 + 's,
     ) -> impl Iterator<Item = (usize, usize, f64)> + 's {
-        assert_eq!(query.atoms.len(), self.positions.len(), "selection is from a different structure");
-        assert_eq!(search.atoms.len(), self.positions.len(), "selection is from a different structure");
+        assert_eq!(query.len(), self.positions.len(), "selection is from a different structure");
+        assert_eq!(search.len(), self.positions.len(), "selection is from a different structure");
         // A query atom's partners lie within its radius plus the largest radius in `search`.
         let largest = search.indices().map(&radius).fold(0.0, f64::max);
         query.indices().flat_map(move |atom_1| {

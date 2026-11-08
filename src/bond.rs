@@ -32,6 +32,15 @@ pub struct Bond {
     pub atom_2: usize,
     pub order: BondOrder,
     pub aromatic: bool,
+    pub source: BondSource,
+}
+
+#[derive(Debug)]
+pub enum BondSource {
+    Template,
+    Backbone,
+    Disulfide,
+    CovalentLink,
 }
 
 impl Edge for Bond {
