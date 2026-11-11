@@ -3,13 +3,13 @@ use std::hash::Hash;
 use std::vec;
 
 use crate::bond::{Link, LinkType, ResidueTemplateBond};
+use crate::bond_graph::{Bonding, LinkIssue, MissingResiudeTemplateError};
 use crate::bond_order::BondOrder;
 use crate::element::Element;
 use crate::frame::Frame;
 use crate::geometry::Point3;
 use crate::graph::Graph;
 use crate::structure::{Atom, Entity, EntityInstance, EntityKind, PolymerKind, Residue, Structure};
-use crate::bond_graph::LinkIssue;
 use crate::{bond_graph, Cif, Row, Value};
 
 // Entries in first-insertion order. Fields are private because `indices` must keep pointing into
@@ -60,6 +60,7 @@ pub enum MmCifError {
     MissingAtom { atom: usize, model: i64 },
     UnknownTemplateAtom { residue: String, atom: String },
     UnsupportedLinks(Vec<LinkIssue>),
+    MissingResidueTemplate(MissingResiudeTemplateError),
 }
 
 fn field<'a, T>(row: &Row<'a>, tag: &'static str, cast: fn(&'a Value) -> Option<T>) -> Result<T, MmCifError> {
@@ -350,9 +351,13 @@ impl MmCIF {
         let frames = build_frames(&atom_rows)?;
         let templates = build_template_bonds(&self.chem_comp_bonds, &self.chem_comp_atoms)?;
 
-        let mut structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonds: Graph::empty() };
+        let bonding = Bonding { bonds: Graph::empty(), implicit_hydrogens: vec![], missing_partners: vec![] };
+        let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonding };
         let links = build_links(&self.struct_conns, &structure, &self.instances);
-        structure.bonds = bond_graph::new(&structure, &templates, &links).map_err(MmCifError::UnsupportedLinks)?;
+        let (structure, issues) = bond_graph::with_bonds(structure, &templates, &links).map_err(MmCifError::MissingResidueTemplate)?;
+        if !issues.is_empty() {
+            return Err(MmCifError::UnsupportedLinks(issues));
+        }
         Ok((structure, frames))
     }
 }

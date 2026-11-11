@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{bond::Bond, element::Element, graph::Graph};
+use crate::{bond_graph::Bonding, element::Element};
 
 #[derive(Debug)]
 pub struct Structure {
@@ -8,7 +8,7 @@ pub struct Structure {
     pub residues: Vec<Residue>,
     pub instances: Vec<EntityInstance>,
     pub entities: Vec<Entity>,
-    pub bonds: Graph<Bond>,
+    pub bonding: Bonding,
 }
 
 impl Structure {

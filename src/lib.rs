@@ -1,6 +1,7 @@
 pub mod bond;
 pub mod bond_graph;
 pub mod bond_order;
+pub mod charge;
 pub mod cif;
 pub mod conformer;
 pub mod contact;

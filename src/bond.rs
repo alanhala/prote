@@ -35,7 +35,7 @@ pub struct Bond {
     pub source: BondSource,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum BondSource {
     Template,
     Backbone,

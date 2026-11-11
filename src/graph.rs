@@ -89,6 +89,14 @@ impl<E: Edge> Graph<E> {
         Graph { edges, neighbors }
     }
 
+    pub fn add_edge(&mut self, edge: E) {
+        let (a, b) = edge.nodes();
+        let id = self.edges.len();
+        self.neighbors[a].push((b, id));
+        self.neighbors[b].push((a, id));
+        self.edges.push(edge);
+    }
+
     pub fn edges(&self) -> &[E] {
         &self.edges
     }
