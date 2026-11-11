@@ -171,6 +171,10 @@ impl Element {
         self.properties().valences
     }
 
+    pub const fn is_metal(self) -> bool {
+        self.valences().is_empty()
+    }
+
     pub fn from_symbol(symbol: &str) -> Option<Element> {
         match symbol {
             "H" => Some(Element::H),

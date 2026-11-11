@@ -53,6 +53,7 @@ pub struct Bonding {
     pub bonds: Graph<Bond>,
     pub implicit_hydrogens: Vec<u8>,
     pub missing_partners: Vec<Vec<MissingPartner>>,
+    pub coordination: Vec<(usize, usize)>,
 }
 
 pub fn with_bonds(
@@ -104,6 +105,7 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
     let mut bonds = vec![];
     let mut implicit_hydrogens = vec![0; structure.atoms.len()];
     let mut missing_partners: Vec<Vec<MissingPartner>> = (0..structure.atoms.len()).map(|_| vec![]).collect();
+    let mut coordination = vec![];
     for (residue_id, residue) in structure.residues.iter().enumerate() {
         // Single-atom residues, such as metal ions, have no bonds and so no template.
         if residue.atoms.len() == 1 && !templates.contains_key(&residue.name) {
@@ -114,6 +116,13 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
             let residue = &structure.residues[residue_id];
             let atom_1 = atom_named(&structure, residue, &template.atom_name_1);
             let atom_2 = atom_named(&structure, residue, &template.atom_name_2);
+            // A bond to a metal doesn't use up valence, so it is kept apart from the covalent bonds.
+            if template.element_1.is_metal() || template.element_2.is_metal() {
+                if let (Some(atom_1), Some(atom_2)) = (atom_1, atom_2) {
+                    coordination.push((atom_1, atom_2));
+                }
+                continue;
+            }
             let (present, name, element) = match (atom_1, atom_2) {
                 (Some(atom_1), Some(atom_2)) => {
                     bonds.push(Bond { atom_1, atom_2, order: template.order, aromatic: template.aromatic, source: BondSource::Template });
@@ -130,7 +139,7 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
             }
         }
     }
-    Ok(Bonding { bonds: Graph::new(structure.atoms.len(), bonds), implicit_hydrogens, missing_partners })
+    Ok(Bonding { bonds: Graph::new(structure.atoms.len(), bonds), implicit_hydrogens, missing_partners, coordination })
 }
 
 fn backbone_bonds(structure: &Structure, bonding: &mut Bonding) -> Vec<LinkIssue> {
@@ -164,7 +173,11 @@ fn link_bonds(bonding: &mut Bonding, links: &[Link]) -> Vec<LinkIssue> {
     let mut issues = vec![];
     for link in links {
         let source = match link.link_type {
-            LinkType::MetalCoordination | LinkType::HydrogenBond => continue,
+            LinkType::MetalCoordination => {
+                bonding.coordination.push((link.atom_1, link.atom_2));
+                continue;
+            }
+            LinkType::HydrogenBond => continue,
             LinkType::Disulfide => BondSource::Disulfide,
             LinkType::Covalent => BondSource::CovalentLink,
         };
@@ -248,6 +261,7 @@ mod tests {
             bonds: Graph::new(atom_count, bonds),
             implicit_hydrogens: vec![0; atom_count],
             missing_partners: (0..atom_count).map(|_| vec![]).collect(),
+            coordination: vec![],
         };
         Structure { atoms, residues: vec![], instances: vec![], entities: vec![], bonding }
     }

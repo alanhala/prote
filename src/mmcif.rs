@@ -351,7 +351,7 @@ impl MmCIF {
         let frames = build_frames(&atom_rows)?;
         let templates = build_template_bonds(&self.chem_comp_bonds, &self.chem_comp_atoms)?;
 
-        let bonding = Bonding { bonds: Graph::empty(), implicit_hydrogens: vec![], missing_partners: vec![] };
+        let bonding = Bonding { bonds: Graph::empty(), implicit_hydrogens: vec![], missing_partners: vec![], coordination: vec![] };
         let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonding };
         let links = build_links(&self.struct_conns, &structure, &self.instances);
         let (structure, issues) = bond_graph::with_bonds(structure, &templates, &links).map_err(MmCifError::MissingResidueTemplate)?;
