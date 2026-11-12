@@ -30,9 +30,13 @@ pub struct Link {
 pub struct Bond {
     pub atom_1: usize,
     pub atom_2: usize,
-    pub order: BondOrder,
-    pub aromatic: bool,
-    pub source: BondSource,
+    pub kind: BondKind,
+}
+
+#[derive(Debug)]
+pub enum BondKind {
+    Covalent { order: BondOrder, aromatic: bool, source: BondSource },
+    Coordination,
 }
 
 #[derive(Debug, Clone, Copy)]

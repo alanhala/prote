@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    bond::{Bond, BondSource, Link, LinkType, ResidueTemplateBond},
+    bond::{Bond, BondKind, BondSource, Link, LinkType, ResidueTemplateBond},
     bond_order::BondOrder,
     element::Element,
     graph::Graph,
@@ -53,7 +53,6 @@ pub struct Bonding {
     pub bonds: Graph<Bond>,
     pub implicit_hydrogens: Vec<u8>,
     pub missing_partners: Vec<Vec<MissingPartner>>,
-    pub coordination: Vec<(usize, usize)>,
 }
 
 pub fn with_bonds(
@@ -88,11 +87,13 @@ fn pay(bonding: &mut Bonding, atom: usize, order: BondOrder, payment: Payment) {
 
 // Makes room at both atoms and adds the bond, or changes nothing when either atom has no room.
 fn add_bond(bonding: &mut Bonding, bond: Bond) -> Result<(), LinkIssueKind> {
-    let (atom_1, atom_2, order) = (bond.atom_1, bond.atom_2, bond.order);
-    let payment_1 = payment(bonding, atom_1, order).ok_or(LinkIssueKind::NoRoom { atom: atom_1, order })?;
-    let payment_2 = payment(bonding, atom_2, order).ok_or(LinkIssueKind::NoRoom { atom: atom_2, order })?;
-    pay(bonding, atom_1, order, payment_1);
-    pay(bonding, atom_2, order, payment_2);
+    if let BondKind::Covalent { order, .. } = bond.kind {
+        let (atom_1, atom_2) = (bond.atom_1, bond.atom_2);
+        let payment_1 = payment(bonding, atom_1, order).ok_or(LinkIssueKind::NoRoom { atom: atom_1, order })?;
+        let payment_2 = payment(bonding, atom_2, order).ok_or(LinkIssueKind::NoRoom { atom: atom_2, order })?;
+        pay(bonding, atom_1, order, payment_1);
+        pay(bonding, atom_2, order, payment_2);
+    }
     bonding.bonds.add_edge(bond);
     Ok(())
 }
@@ -105,7 +106,6 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
     let mut bonds = vec![];
     let mut implicit_hydrogens = vec![0; structure.atoms.len()];
     let mut missing_partners: Vec<Vec<MissingPartner>> = (0..structure.atoms.len()).map(|_| vec![]).collect();
-    let mut coordination = vec![];
     for (residue_id, residue) in structure.residues.iter().enumerate() {
         // Single-atom residues, such as metal ions, have no bonds and so no template.
         if residue.atoms.len() == 1 && !templates.contains_key(&residue.name) {
@@ -119,13 +119,17 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
             // A bond to a metal doesn't use up valence, so it is kept apart from the covalent bonds.
             if template.element_1.is_metal() || template.element_2.is_metal() {
                 if let (Some(atom_1), Some(atom_2)) = (atom_1, atom_2) {
-                    coordination.push((atom_1, atom_2));
+                    bonds.push(Bond { atom_1, atom_2, kind: BondKind::Coordination });
                 }
                 continue;
             }
             let (present, name, element) = match (atom_1, atom_2) {
                 (Some(atom_1), Some(atom_2)) => {
-                    bonds.push(Bond { atom_1, atom_2, order: template.order, aromatic: template.aromatic, source: BondSource::Template });
+                    bonds.push(Bond {
+                        atom_1,
+                        atom_2,
+                        kind: BondKind::Covalent { order: template.order, aromatic: template.aromatic, source: BondSource::Template },
+                    });
                     continue;
                 }
                 (Some(present), None) => (present, &template.atom_name_2, template.element_2),
@@ -139,7 +143,7 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
             }
         }
     }
-    Ok(Bonding { bonds: Graph::new(structure.atoms.len(), bonds), implicit_hydrogens, missing_partners, coordination })
+    Ok(Bonding { bonds: Graph::new(structure.atoms.len(), bonds), implicit_hydrogens, missing_partners })
 }
 
 fn backbone_bonds(structure: &Structure, bonding: &mut Bonding) -> Vec<LinkIssue> {
@@ -160,7 +164,7 @@ fn backbone_bonds(structure: &Structure, bonding: &mut Bonding) -> Vec<LinkIssue
             let (Some(atom_1), Some(atom_2)) = (atom_named(&structure, previous, name_1), atom_named(&structure, next, name_2)) else {
                 continue;
             };
-            let bond = Bond { atom_1, atom_2, order: BondOrder::Single, aromatic: false, source: BondSource::Backbone };
+            let bond = Bond { atom_1, atom_2, kind: BondKind::Covalent { order: BondOrder::Single, aromatic: false, source: BondSource::Backbone } };
             if let Err(kind) = add_bond(bonding, bond) {
                 issues.push(LinkIssue { atom_1, atom_2, kind });
             }
@@ -174,7 +178,7 @@ fn link_bonds(bonding: &mut Bonding, links: &[Link]) -> Vec<LinkIssue> {
     for link in links {
         let source = match link.link_type {
             LinkType::MetalCoordination => {
-                bonding.coordination.push((link.atom_1, link.atom_2));
+                add_bond(bonding, Bond { atom_1: link.atom_1, atom_2: link.atom_2, kind: BondKind::Coordination }).unwrap();
                 continue;
             }
             LinkType::HydrogenBond => continue,
@@ -187,7 +191,8 @@ fn link_bonds(bonding: &mut Bonding, links: &[Link]) -> Vec<LinkIssue> {
             continue;
         }
         // Each bond is added as soon as it is decided, so a later link sees it.
-        let added = link_order(bonding, link).and_then(|order| add_bond(bonding, Bond { atom_1, atom_2, order, aromatic: false, source }));
+        let added = link_order(bonding, link)
+            .and_then(|order| add_bond(bonding, Bond { atom_1, atom_2, kind: BondKind::Covalent { order, aromatic: false, source } }));
         if let Err(kind) = added {
             issues.push(LinkIssue { atom_1, atom_2, kind });
         }
@@ -220,7 +225,10 @@ fn link_order(bonding: &Bonding, link: &Link) -> Result<BondOrder, LinkIssueKind
 fn keeps_multiple_bond(bonding: &Bonding, atom: usize) -> bool {
     bonding.bonds.neighbors(atom).iter().any(|&(_, edge)| {
         let bond = &bonding.bonds.edges()[edge];
-        bond.order != BondOrder::Single && !bond.aromatic
+        match bond.kind {
+            BondKind::Covalent { order, aromatic, source: _ } => order != BondOrder::Single && !aromatic,
+            BondKind::Coordination => false,
+        }
     })
 }
 
@@ -228,10 +236,22 @@ pub fn rings(structure: &Structure) -> Vec<Ring> {
     structure
         .bonding
         .bonds
-        .rings_where(|edge| !matches!(structure.bonding.bonds.edges()[edge].source, BondSource::Disulfide | BondSource::CovalentLink))
+        .rings_where(|edge| {
+            let bond = &structure.bonding.bonds.edges()[edge];
+            match bond.kind {
+                BondKind::Covalent { source, .. } => !matches!(source, BondSource::Disulfide | BondSource::CovalentLink),
+                BondKind::Coordination => false,
+            }
+        })
         .iter()
         .map(|ring| {
-            let aromatic = ring.edges.iter().all(|&edge| structure.bonding.bonds.edges()[edge].aromatic);
+            let aromatic = ring.edges.iter().all(|&edge| {
+                let bond = &structure.bonding.bonds.edges()[edge];
+                match bond.kind {
+                    BondKind::Covalent { order: _, aromatic, source: _ } => aromatic,
+                    BondKind::Coordination => false,
+                }
+            });
             Ring { atoms: ring.nodes.clone(), aromatic }
         })
         .collect()
@@ -252,7 +272,7 @@ mod tests {
     use crate::structure::Atom;
 
     fn bond(atom_1: usize, atom_2: usize, aromatic: bool, source: BondSource) -> Bond {
-        Bond { atom_1, atom_2, order: BondOrder::Single, aromatic, source }
+        Bond { atom_1, atom_2, kind: BondKind::Covalent { order: BondOrder::Single, aromatic, source } }
     }
 
     fn structure_with(atom_count: usize, bonds: Vec<Bond>) -> Structure {
@@ -261,7 +281,6 @@ mod tests {
             bonds: Graph::new(atom_count, bonds),
             implicit_hydrogens: vec![0; atom_count],
             missing_partners: (0..atom_count).map(|_| vec![]).collect(),
-            coordination: vec![],
         };
         Structure { atoms, residues: vec![], instances: vec![], entities: vec![], bonding }
     }
