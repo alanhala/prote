@@ -1,4 +1,4 @@
-use crate::{bond_order::BondOrder, element::Element, frame::Frame, graph::Edge};
+use crate::{bond_order::BondOrder, element::Element, frame::Frame, geometry::Point3, graph::Edge};
 
 #[derive(Debug)]
 pub struct ResidueTemplateBond {
@@ -54,7 +54,7 @@ impl Edge for Bond {
 }
 
 impl Bond {
-    pub fn length(&self, frame: &Frame) -> f64 {
-        frame.positions[self.atom_1].distance(&frame.positions[self.atom_2])
+    pub fn length(&self, positions: &[Point3]) -> f64 {
+        positions[self.atom_1].distance(&positions[self.atom_2])
     }
 }

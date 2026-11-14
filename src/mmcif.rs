@@ -3,8 +3,8 @@ use std::hash::Hash;
 use std::vec;
 
 use crate::bond::{Link, LinkType, ResidueTemplateBond};
-use crate::bond_graph::{Bonding, LinkIssue, MissingResiudeTemplateError};
 use crate::bond_order::BondOrder;
+use crate::bond_graph::{Bonding, LinkIssue, MissingResiudeTemplateError};
 use crate::element::Element;
 use crate::frame::Frame;
 use crate::geometry::Point3;
@@ -152,6 +152,10 @@ fn element(v: &Value) -> Option<Element> {
     Element::from_symbol(&normalized)
 }
 
+fn charge(v: &Value) -> Option<i8> {
+    i8::try_from(v.as_int()?).ok()
+}
+
 #[derive(Debug)]
 pub struct ChemCompBond {
     pub atom_1: String,
@@ -186,6 +190,7 @@ pub struct AtomSite {
     pub occupancy: f32,
     pub b_factor: f32,
     pub model: i64,
+    pub pdbx_formal_charge: Option<i8>,
 }
 
 #[derive(Debug)]
@@ -258,6 +263,7 @@ impl MmCIF {
                 occupancy: field(&row, "_atom_site.occupancy", Value::as_float)? as f32,
                 b_factor: field(&row, "_atom_site.B_iso_or_equiv", Value::as_float)? as f32,
                 model: field(&row, "_atom_site.pdbx_PDB_model_num", Value::as_int)?,
+                pdbx_formal_charge: optional_column(&row, "_atom_site.pdbx_formal_charge", charge)?,
             };
             let instance = instances.get_or_insert_with(label_asym_id, || InstanceRows {
                 entity_id: label_entity_id,
@@ -341,7 +347,9 @@ impl MmCIF {
             for ((number, _), residue) in instance.residues.iter() {
                 let atom_start = atoms.len();
                 for (name, rows) in residue.atoms.iter() {
-                    atoms.push(Atom { element: rows[0].type_symbol, name: name.clone() });
+                    // Some files write 0 on every atom as a default, so only a non-zero charge counts as stated.
+                    let stated_charge = rows[0].pdbx_formal_charge.filter(|&charge| charge != 0);
+                    atoms.push(Atom { element: rows[0].type_symbol, name: name.clone(), stated_charge });
                     atom_rows.push(rows);
                 }
                 residues.push(Residue { name: residue.name.clone(), number: *number, seq_id: residue.seq_id, atoms: atom_start..atoms.len() });
@@ -351,7 +359,7 @@ impl MmCIF {
         let frames = build_frames(&atom_rows)?;
         let templates = build_template_bonds(&self.chem_comp_bonds, &self.chem_comp_atoms)?;
 
-        let bonding = Bonding { bonds: Graph::empty(), implicit_hydrogens: vec![], missing_partners: vec![] };
+        let bonding = Bonding { bonds: Graph::empty(), implicit_hydrogens: vec![], missing_partners: vec![], rings: vec![] };
         let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonding };
         let links = build_links(&self.struct_conns, &structure, &self.instances);
         let (structure, issues) = bond_graph::with_bonds(structure, &templates, &links).map_err(MmCifError::MissingResidueTemplate)?;

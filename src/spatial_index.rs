@@ -10,7 +10,7 @@ impl SpatialPoint<f64, 3> for Point3 {
     }
 }
 pub struct SpatialIndex<'a> {
-    positions: &'a [Point3],
+    pub positions: &'a [Point3],
     tree: KdTree<f64, 3>,
 }
 

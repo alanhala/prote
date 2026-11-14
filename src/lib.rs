@@ -1,3 +1,4 @@
+pub mod atom_types;
 pub mod bond;
 pub mod bond_graph;
 pub mod bond_order;

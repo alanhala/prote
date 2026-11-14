@@ -19,12 +19,18 @@ impl Structure {
     pub fn instance_of(&self, residue: usize) -> usize {
         self.instances.partition_point(|instance| instance.residues.end <= residue)
     }
+
+    pub fn atom_named(&self, residue: &Residue, name: &str) -> Option<usize> {
+        residue.atoms.clone().find(|&atom| self.atoms[atom].name == name)
+    }
 }
 
 #[derive(Debug)]
 pub struct Atom {
     pub element: Element,
     pub name: String,
+    /// The non-zero formal charge the file gives this atom (`pdbx_formal_charge`), if any.
+    pub stated_charge: Option<i8>,
 }
 
 #[derive(Debug)]
