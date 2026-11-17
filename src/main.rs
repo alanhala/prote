@@ -2,6 +2,7 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
 use prote::{
+    atom_properties::AtomProperties,
     atom_types::AtomTypes,
     contact::{self, Contact},
     dot,
@@ -43,7 +44,7 @@ fn main() {
 
     // (other residue, kind) -> (number of contacts, shortest distance)
     let mut found: BTreeMap<(usize, usize), (usize, f64)> = BTreeMap::new();
-    let types = AtomTypes::new(&structure);
+    let types = AtomTypes::new(&structure, &AtomProperties::new(&structure));
     for contact in contact::find(&structure, &types, &index, &query, &search) {
         let (kind, atom_1, atom_2, distance) = describe(&structure, &contact);
         let (residue_1, residue_2) = (structure.residue_of(atom_1), structure.residue_of(atom_2));

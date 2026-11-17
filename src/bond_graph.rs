@@ -19,6 +19,7 @@ pub struct MissingPartner {
     pub name: String,
     pub element: Element,
     pub order: BondOrder,
+    pub aromatic: bool,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,29 @@ pub struct Bonding {
     pub implicit_hydrogens: Vec<u8>,
     pub missing_partners: Vec<Vec<MissingPartner>>,
     pub rings: Vec<Ring>,
+}
+
+impl Bonding {
+    pub fn bond_order_sum(&self, atom: usize) -> u8 {
+        let present: u8 = self
+            .bonds
+            .neighbors(atom)
+            .iter()
+            .map(|&(_, edge)| match self.bonds.edges()[edge].kind {
+                BondKind::Coordination => 0,
+                BondKind::Covalent { order, .. } => order.as_u8(),
+            })
+            .sum();
+        let missing: u8 = self.missing_partners[atom].iter().map(|partner| partner.order.as_u8()).sum();
+        present + self.implicit_hydrogens[atom] + missing
+    }
+
+    pub fn atoms_bonded_sum(&self, atom: usize) -> u8 {
+        let present =
+            self.bonds.neighbors(atom).iter().filter(|&&(_, edge)| matches!(self.bonds.edges()[edge].kind, BondKind::Covalent { .. })).count() as u8;
+        let missing = self.missing_partners[atom].len() as u8;
+        present + self.implicit_hydrogens[atom] + missing
+    }
 }
 
 pub fn with_bonds(
@@ -186,7 +210,7 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
             if element == Element::H {
                 implicit_hydrogens[present] += 1;
             } else {
-                missing_partners[present].push(MissingPartner { name: name.clone(), element, order: template.order });
+                missing_partners[present].push(MissingPartner { name: name.clone(), element, order: template.order, aromatic: template.aromatic });
             }
         }
     }
@@ -270,7 +294,7 @@ fn keeps_multiple_bond(bonding: &Bonding, atom: usize) -> bool {
     bonding.bonds.neighbors(atom).iter().any(|&(_, edge)| {
         let bond = &bonding.bonds.edges()[edge];
         match bond.kind {
-            BondKind::Covalent { order, aromatic, source: _ } => order != BondOrder::Single && !aromatic,
+            BondKind::Covalent { order, aromatic, .. } => order != BondOrder::Single && !aromatic,
             BondKind::Coordination => false,
         }
     })
