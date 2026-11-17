@@ -3,8 +3,8 @@ use std::hash::Hash;
 use std::vec;
 
 use crate::bond::{Link, LinkType, ResidueTemplateBond};
-use crate::bond_order::BondOrder;
 use crate::bond_graph::{Bonding, LinkIssue, MissingResiudeTemplateError};
+use crate::bond_order::BondOrder;
 use crate::element::Element;
 use crate::frame::Frame;
 use crate::geometry::Point3;
@@ -362,7 +362,7 @@ impl MmCIF {
         let bonding = Bonding { bonds: Graph::empty(), implicit_hydrogens: vec![], missing_partners: vec![], rings: vec![] };
         let structure = Structure { atoms, residues, instances, entities: self.entities.values().cloned().collect(), bonding };
         let links = build_links(&self.struct_conns, &structure, &self.instances);
-        let (structure, issues) = bond_graph::with_bonds(structure, &templates, &links).map_err(MmCifError::MissingResidueTemplate)?;
+        let (structure, issues) = bond_graph::with_bonds(structure, &templates, &links, 7.4).map_err(MmCifError::MissingResidueTemplate)?;
         if !issues.is_empty() {
             return Err(MmCifError::UnsupportedLinks(issues));
         }

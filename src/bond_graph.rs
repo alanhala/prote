@@ -60,12 +60,61 @@ pub fn with_bonds(
     structure: Structure,
     templates: &HashMap<String, Vec<ResidueTemplateBond>>,
     links: &[Link],
+    ph: f64,
 ) -> Result<(Structure, Vec<LinkIssue>), MissingResiudeTemplateError> {
     let mut bonding = template_bonds(&structure, templates)?;
+    let template_hydrogens = bonding.implicit_hydrogens.clone();
     let mut issues = backbone_bonds(&structure, &mut bonding);
     issues.extend(link_bonds(&mut bonding, links));
+    protonate(&structure, &mut bonding, &template_hydrogens, ph);
     bonding.rings = rings(&bonding);
     Ok((Structure { bonding, ..structure }, issues))
+}
+
+fn protonate(structure: &Structure, bonding: &mut Bonding, template_hydrogens: &[u8], ph: f64) {
+    for instance in structure.instances.iter() {
+        if !matches!(structure.entities[instance.entity].kind, EntityKind::Polymer(PolymerKind::PolypeptideD | PolymerKind::PolypeptideL)) {
+            continue;
+        }
+        for residue_id in instance.residues.clone() {
+            let residue = &structure.residues[residue_id];
+            let (h, group): (i8, &[&str]) = match residue.name.as_str() {
+                "ASP" => (if ph >= 3.67 { -1 } else { 0 }, &["OD1", "OD2"]),
+                "GLU" => (if ph >= 4.25 { -1 } else { 0 }, &["OE1", "OE2"]),
+                "HIS" => (if ph >= 6.54 { -1 } else { 0 }, &["ND1", "NE2"]),
+                "CYS" => (if ph >= 8.55 { -1 } else { 0 }, &["SG"]),
+                "TYR" => (if ph >= 9.84 { -1 } else { 0 }, &["OH"]),
+                "LYS" => (if ph >= 10.40 { -1 } else { 0 }, &["NZ"]),
+                "ARG" => (if ph >= 12.0 { -1 } else { 0 }, &["NH2", "NH1", "NE"]),
+                _ => (0, &[]),
+            };
+            if h < 0 {
+                for name in group {
+                    if let Some(atom_id) = structure.atom_named(residue, name) {
+                        if bonding.implicit_hydrogens[atom_id] > 0 {
+                            bonding.implicit_hydrogens[atom_id] -= 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            if residue.seq_id == Some(1) && ph < 8.0 {
+                if let Some(atom) = structure.atom_named(residue, "N") {
+                    // Fewer hydrogens than the template means a link capped the N, which then stays neutral.
+                    if bonding.implicit_hydrogens[atom] == template_hydrogens[atom] {
+                        bonding.implicit_hydrogens[atom] += 1;
+                    }
+                }
+            }
+            if ph >= 3.67 {
+                if let Some(atom) = structure.atom_named(residue, "OXT") {
+                    if bonding.implicit_hydrogens[atom] > 0 {
+                        bonding.implicit_hydrogens[atom] -= 1;
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn payment(bonding: &Bonding, atom: usize, order: BondOrder) -> Option<Payment> {
