@@ -86,6 +86,18 @@ fn h_bond(
         _ => vec![],
     };
     h_bond_roles.into_iter().find_map(|(acceptor, donor)| {
+        let hydrogens: Vec<usize> =
+            structure.covalent_partners(donor).filter(|partner| partner.element == Element::H).filter_map(|partner| partner.atom).collect();
+        let points_at_acceptor = |hydrogen: usize| {
+            (index.positions[donor] - index.positions[hydrogen]).angle(&(index.positions[acceptor] - index.positions[hydrogen])).to_degrees() >= 130.0
+        };
+        if hydrogens.into_iter().any(points_at_acceptor) {
+            return Some(Contact::HydrogenBond { donor, acceptor, distance });
+        }
+        // We checked all the explicit hydrogens and none passed the check
+        if structure.bonding.implicit_hydrogens[donor] == 0 {
+            return None;
+        }
         let present: Vec<usize> =
             structure.covalent_partners(donor).filter(|partner| partner.element != Element::H).filter_map(|partner| partner.atom).collect();
         match (properties.hybridization[donor], present.len()) {
@@ -119,6 +131,7 @@ fn h_bond(
                 ((index.positions[acceptor] - index.positions[donor]).angle(&hydrogen_direction).to_degrees() <= 35.0)
                     .then(|| Contact::HydrogenBond { donor, acceptor, distance })
             }
+            // Nothing to measure an angle against (water has no neighbor in the file).
             _ => Some(Contact::HydrogenBond { donor, acceptor, distance }),
         }
     })
