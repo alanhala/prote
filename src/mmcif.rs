@@ -3,14 +3,14 @@ use std::hash::Hash;
 use std::vec;
 
 use crate::bond::{Link, LinkType, ResidueTemplateBond};
-use crate::bond_graph::{Bonding, LinkIssue, MissingResiudeTemplateError};
+use crate::bond_graph::{self, Bonding, LinkIssue, MissingResiudeTemplateError};
 use crate::bond_order::BondOrder;
+use crate::cif::{Cif, Row, Value};
 use crate::element::Element;
 use crate::frame::Frame;
 use crate::geometry::Point3;
 use crate::graph::Graph;
 use crate::structure::{Atom, Entity, EntityInstance, EntityKind, PolymerKind, Residue, Structure};
-use crate::{bond_graph, Cif, Row, Value};
 
 // Entries in first-insertion order. Fields are private because `indices` must keep pointing into
 // `entries`.

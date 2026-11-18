@@ -4,13 +4,13 @@ use std::{collections::BTreeMap, fs, path::Path};
 use prote::{
     atom_properties::AtomProperties,
     atom_types::AtomTypes,
+    cif::Cif,
     contact::{self, Contact},
     dot,
     mask::Mask,
     mmcif::MmCIF,
     spatial_index::SpatialIndex,
     structure::Structure,
-    Cif,
 };
 
 // Most specific first: an edge takes the colour of the most specific kind between its two residues.
