@@ -1,6 +1,6 @@
 use crate::{bond_order::BondOrder, structure::Structure};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Hybridization {
     Sp,
     Sp2,

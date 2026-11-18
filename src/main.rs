@@ -14,18 +14,25 @@ use prote::{
 };
 
 // Most specific first: an edge takes the colour of the most specific kind between its two residues.
-const KINDS: [(&str, &str); 5] =
-    [("coordination", "#eb6834"), ("face-to-face", "#1baf7a"), ("edge-to-face", "#eda100"), ("hydrophobic", "#2a78d6"), ("van der Waals", "#8a8984")];
+const KINDS: [(&str, &str); 6] = [
+    ("coordination", "#eb6834"),
+    ("hydrogen bond", "#c2255c"),
+    ("face-to-face", "#1baf7a"),
+    ("edge-to-face", "#eda100"),
+    ("hydrophobic", "#2a78d6"),
+    ("van der Waals", "#8a8984"),
+];
 
 /// The kind's position in `KINDS`, one atom from each side, and the distance.
 fn describe(structure: &Structure, contact: &Contact) -> (usize, usize, usize, f64) {
     let ring_atom = |ring: usize| structure.bonding.rings[ring].atoms[0];
     match *contact {
         Contact::MetalCoordination { atom_1, atom_2, distance } => (0, atom_1, atom_2, distance),
-        Contact::FaceToFace { ring_1, ring_2, distance, .. } => (1, ring_atom(ring_1), ring_atom(ring_2), distance),
-        Contact::EdgeToFace { ring_1, ring_2, distance, .. } => (2, ring_atom(ring_1), ring_atom(ring_2), distance),
-        Contact::Hydrophobic { atom_1, atom_2, distance } => (3, atom_1, atom_2, distance),
-        Contact::VanDerWaals { atom_1, atom_2, distance } => (4, atom_1, atom_2, distance),
+        Contact::HydrogenBond { donor, acceptor, distance } => (1, donor, acceptor, distance),
+        Contact::FaceToFace { ring_1, ring_2, distance, .. } => (2, ring_atom(ring_1), ring_atom(ring_2), distance),
+        Contact::EdgeToFace { ring_1, ring_2, distance, .. } => (3, ring_atom(ring_1), ring_atom(ring_2), distance),
+        Contact::Hydrophobic { atom_1, atom_2, distance } => (4, atom_1, atom_2, distance),
+        Contact::VanDerWaals { atom_1, atom_2, distance } => (5, atom_1, atom_2, distance),
     }
 }
 
@@ -44,8 +51,9 @@ fn main() {
 
     // (other residue, kind) -> (number of contacts, shortest distance)
     let mut found: BTreeMap<(usize, usize), (usize, f64)> = BTreeMap::new();
-    let types = AtomTypes::new(&structure, &AtomProperties::new(&structure));
-    for contact in contact::find(&structure, &types, &index, &query, &search) {
+    let properties = AtomProperties::new(&structure);
+    let types = AtomTypes::new(&structure, &properties);
+    for contact in contact::find(&structure, &types, &properties, &index, &query, &search) {
         let (kind, atom_1, atom_2, distance) = describe(&structure, &contact);
         let (residue_1, residue_2) = (structure.residue_of(atom_1), structure.residue_of(atom_2));
         let other = if residue_1 == ligand { residue_2 } else { residue_1 };

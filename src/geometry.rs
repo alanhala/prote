@@ -18,11 +18,7 @@ impl Point3 {
 
     pub fn plane(points: &[Point3]) -> (Plane3, f64) {
         let n = points.len() as f64;
-        let centroid = Point3::new(
-            points.iter().map(|p| p.x).sum::<f64>() / n,
-            points.iter().map(|p| p.y).sum::<f64>() / n,
-            points.iter().map(|p| p.z).sum::<f64>() / n,
-        );
+        let centroid = Self::centroid(points);
         let mut covariance = nalgebra::Matrix3::<f64>::zeros();
         for point in points {
             let distance = nalgebra::Vector3::new(point.x - centroid.x, point.y - centroid.y, point.z - centroid.z);
@@ -41,6 +37,15 @@ impl Point3 {
             })
             .fold(0.0, f64::max);
         (Plane3 { centroid, normal }, deviation)
+    }
+
+    pub fn centroid(points: &[Point3]) -> Point3 {
+        let n = points.len() as f64;
+        Point3::new(
+            points.iter().map(|p| p.x).sum::<f64>() / n,
+            points.iter().map(|p| p.y).sum::<f64>() / n,
+            points.iter().map(|p| p.z).sum::<f64>() / n,
+        )
     }
 }
 
