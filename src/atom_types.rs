@@ -33,10 +33,18 @@ impl AtomTypes {
             cation: Mask::from_bools((0..structure.atoms.len()).map(|atom| shares_charge(structure, atom_properties, atom, 1)).collect()),
             anion: Mask::from_bools((0..structure.atoms.len()).map(|atom| shares_charge(structure, atom_properties, atom, -1)).collect()),
             water: Selection::by_instance(structure, |_, entity| entity.kind == EntityKind::Water),
-            // Fluorine is left out: it holds its electrons too tightly to form the positive patch a halogen bond needs.
             halogen_bond_donor: Selection::by_atom(structure, |atom| matches!(atom.element, Element::Cl | Element::Br | Element::I)),
-            halogen_bond_acceptor: Selection::by_atom(structure, |atom| matches!(atom.element, Element::N | Element::O | Element::S)),
+            halogen_bond_acceptor: Mask::from_bools(
+                (0..structure.atoms.len()).map(|atom| is_halogen_bond_acceptor(structure, atom_properties, atom)).collect(),
+            ),
         }
+    }
+}
+
+fn is_halogen_bond_acceptor(structure: &Structure, atom_properties: &AtomProperties, atom: usize) -> bool {
+    match structure.atoms[atom].element {
+        Element::S => atom_properties.lone_pairs[atom].is_some_and(|lone_pairs| lone_pairs > 0),
+        _ => is_hydrogen_bond_acceptor(structure, atom_properties, atom),
     }
 }
 
