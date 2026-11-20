@@ -37,6 +37,8 @@ fn main() {
             Contact::VanDerWaals { atom_1, atom_2, distance } => ("van der Waals", "#8a8984", atom_1, atom_2, distance),
             Contact::Ionic { anion, cation, distance } => ("ionic", "#02f02a", anion, cation, distance),
             Contact::SaltBridge { anion, cation, distance } => ("salt bridge", "#b70cf0", anion, cation, distance),
+            Contact::CationPi { cation, ring, distance, .. } => ("cation-pi", "#7048e8", cation, ring_atom(ring), distance),
+            Contact::Halogen { halogen, acceptor, distance } => ("halogen bond", "#0b7285", halogen, acceptor, distance),
             // Drawn through the water: one node for it and an edge to each end.
             Contact::WaterBridge { atom_1, atom_2, water, distance_1_to_water, distance_2_to_water } => {
                 if seen.insert(water) {

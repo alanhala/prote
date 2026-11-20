@@ -29,7 +29,9 @@ pub enum Contact {
     HydrogenBond { donor: usize, acceptor: usize, distance: f64 },
     Ionic { cation: usize, anion: usize, distance: f64 },
     SaltBridge { cation: usize, anion: usize, distance: f64 },
-    WaterBridge { atom_1: usize, atom_2: usize, water: usize, distance_1_to_water: f64, distance_2_to_water: f64 }, // later: CationPi { cation, ring, .. }
+    WaterBridge { atom_1: usize, atom_2: usize, water: usize, distance_1_to_water: f64, distance_2_to_water: f64 },
+    CationPi { cation: usize, ring: usize, distance: f64, normal_to_cation_angle: f64 },
+    Halogen { halogen: usize, acceptor: usize, distance: f64 },
 }
 
 struct AtomPairCheck {
@@ -37,10 +39,11 @@ struct AtomPairCheck {
     evaluate: fn(&Structure, &SpatialIndex, &AtomTypes, &AtomProperties, usize, usize, f64) -> Option<Contact>,
 }
 
-const ATOM_PAIR_CHECKS: [AtomPairCheck; 3] = [
+const ATOM_PAIR_CHECKS: [AtomPairCheck; 4] = [
     AtomPairCheck { distance: 4.5, evaluate: hydrophobic },
     AtomPairCheck { distance: 2.8, evaluate: metal_coordination },
     AtomPairCheck { distance: 4.5, evaluate: electrostatic },
+    AtomPairCheck { distance: 3.5, evaluate: halogen },
 ];
 
 fn hydrophobic(
@@ -53,6 +56,36 @@ fn hydrophobic(
     distance: f64,
 ) -> Option<Contact> {
     (types.hydrophobic.contains(atom_1) && types.hydrophobic.contains(atom_2)).then_some(Contact::Hydrophobic { atom_1, atom_2, distance })
+}
+
+fn halogen(
+    structure: &Structure,
+    index: &SpatialIndex,
+    types: &AtomTypes,
+    _: &AtomProperties,
+    atom_1: usize,
+    atom_2: usize,
+    distance: f64,
+) -> Option<Contact> {
+    let (halogen, acceptor) = if types.halogen_bond_donor.contains(atom_1) && types.halogen_bond_acceptor.contains(atom_2) {
+        Some((atom_1, atom_2))
+    } else if types.halogen_bond_donor.contains(atom_2) && types.halogen_bond_acceptor.contains(atom_1) {
+        Some((atom_2, atom_1))
+    } else {
+        None
+    }?;
+    let carbon_within_angle =
+        structure.covalent_partners(halogen).filter(|partner| partner.element == Element::C).filter_map(|partner| partner.atom).any(|carbon| {
+            let carbon_halogen = index.positions[carbon] - index.positions[halogen];
+            let acceptor_halogen = index.positions[acceptor] - index.positions[halogen];
+            (130.0..=180.0).contains(&carbon_halogen.angle(&acceptor_halogen).to_degrees())
+        });
+    let neighbour_within_angle = structure.covalent_partners(acceptor).filter_map(|partner| partner.atom).any(|neighbour| {
+        let halogen_acceptor = index.positions[halogen] - index.positions[acceptor];
+        let neighbour_acceptor = index.positions[neighbour] - index.positions[acceptor];
+        (80.0..=140.0).contains(&halogen_acceptor.angle(&neighbour_acceptor).to_degrees())
+    });
+    (neighbour_within_angle && carbon_within_angle).then(|| Contact::Halogen { halogen, acceptor, distance })
 }
 
 fn metal_coordination(
@@ -199,25 +232,48 @@ pub fn find(
     query: &Selection,
     search: &Selection,
 ) -> Vec<Contact> {
+    let (mut contacts, unexplained) = atom_pair_contacts(structure, types, properties, index, query, search);
+    let rings = ring_contacts(structure, types, index, query, search);
+    let van_der_waals = van_der_waals(structure, &unexplained, &rings);
+    contacts.extend(rings);
+    contacts.extend(water_bridges(structure, types, properties, index, query, search));
+    contacts.extend(van_der_waals);
+    contacts
+}
+
+fn atom_pair_contacts(
+    structure: &Structure,
+    types: &AtomTypes,
+    properties: &AtomProperties,
+    index: &SpatialIndex,
+    query: &Selection,
+    search: &Selection,
+) -> (Vec<Contact>, Vec<(usize, usize, f64)>) {
     let max_distance = ATOM_PAIR_CHECKS.iter().max_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap()).unwrap().distance;
-    let mut contacts = vec![];
-    let candidates: Vec<(usize, usize, f64)> = index
+    let candidates = index
         .pairs_within(query, search, |atom_id| structure.atoms[atom_id].element.van_der_waals_radius().unwrap_or(0.0).max(max_distance / 2.0))
-        .filter(|&(atom_1, atom_2, _)| !structure.bonding.bonds.within_steps(atom_1, atom_2, 3))
-        .collect();
-    let mut explained = vec![false; candidates.len()];
-    for (i, &(atom_1, atom_2, distance)) in candidates.iter().enumerate() {
+        .filter(|&(atom_1, atom_2, _)| !structure.bonding.bonds.within_steps(atom_1, atom_2, 3));
+    let mut contacts = vec![];
+    let mut unexplained = vec![];
+    for (atom_1, atom_2, distance) in candidates {
+        let mut explained = false;
         for check in &ATOM_PAIR_CHECKS {
             if distance <= check.distance {
                 if let Some(contact) = (check.evaluate)(structure, index, types, properties, atom_1, atom_2, distance) {
-                    explained[i] = true;
+                    explained = true;
                     contacts.push(contact);
                 }
             }
         }
+        if !explained {
+            unexplained.push((atom_1, atom_2, distance));
+        }
     }
+    (contacts, unexplained)
+}
 
-    let mut ring_pairs: HashSet<(usize, usize)> = HashSet::new();
+fn ring_contacts(structure: &Structure, types: &AtomTypes, index: &SpatialIndex, query: &Selection, search: &Selection) -> Vec<Contact> {
+    let mut contacts = vec![];
     let aromatic: Mask<Ring> = Mask::from_bools(structure.bonding.rings.iter().map(|ring| ring.aromatic).collect());
     let query_rings: Mask<Ring> =
         aromatic.and(&Mask::from_bools(structure.bonding.rings.iter().map(|ring| ring.atoms.iter().all(|&atom| query.contains(atom))).collect()));
@@ -230,17 +286,42 @@ pub fn find(
             if ring_1 == ring_2 || found_from_ring_2 || shares_atoms {
                 continue;
             }
-            if let Some(contact) = ring_pair_contact(structure, index, ring_1, ring_2) {
-                contacts.push(contact);
-                for &atom_1 in &structure.bonding.rings[ring_1].atoms {
-                    for &atom_2 in &structure.bonding.rings[ring_2].atoms {
-                        ring_pairs.insert(unordered(atom_1, atom_2));
-                    }
-                }
-            }
+            contacts.extend(ring_pair_contact(structure, index, ring_1, ring_2));
         }
     }
 
+    for ring in aromatic.indices() {
+        for cation in types.cation.indices() {
+            let wanted = (query_rings.contains(ring) && search.contains(cation)) || (query.contains(cation) && search_rings.contains(ring));
+            if !wanted {
+                continue;
+            }
+
+            if structure.bonding.rings[ring].atoms.contains(&cation) {
+                continue;
+            }
+
+            let plane = structure.bonding.rings[ring].plane(index.positions);
+            let to_cation = index.positions[cation] - plane.centroid;
+            let distance = to_cation.magnitude();
+            let normal_to_cation_angle = plane.normal_angle(&to_cation).to_degrees();
+            if distance <= 4.5 && normal_to_cation_angle <= 30.0 {
+                contacts.push(Contact::CationPi { cation, ring, distance, normal_to_cation_angle });
+            }
+        }
+    }
+    contacts
+}
+
+fn water_bridges(
+    structure: &Structure,
+    types: &AtomTypes,
+    properties: &AtomProperties,
+    index: &SpatialIndex,
+    query: &Selection,
+    search: &Selection,
+) -> Vec<Contact> {
+    let mut contacts = vec![];
     let bonded_to_water = |selection: &Selection| -> Vec<(usize, usize, f64)> {
         index
             .pairs_closer_than(selection, &types.water, 3.5)
@@ -270,13 +351,34 @@ pub fn find(
             }
         }
     }
+    contacts
+}
 
-    for (i, &(atom_1, atom_2, distance)) in candidates.iter().enumerate() {
-        if !explained[i] && !ring_pairs.contains(&unordered(atom_1, atom_2)) && touching(structure, atom_1, atom_2, distance) {
-            contacts.push(Contact::VanDerWaals { atom_1, atom_2, distance });
+/// The leftover kind: touching pairs that no atom pair check explained and that are not part of a ring contact.
+fn van_der_waals(structure: &Structure, unexplained: &[(usize, usize, f64)], ring_contacts: &[Contact]) -> Vec<Contact> {
+    let mut ring_pairs: HashSet<(usize, usize)> = HashSet::new();
+    for contact in ring_contacts {
+        match contact {
+            Contact::FaceToFace { ring_1, ring_2, .. } | Contact::EdgeToFace { ring_1, ring_2, .. } => {
+                for &atom_1 in &structure.bonding.rings[*ring_1].atoms {
+                    for &atom_2 in &structure.bonding.rings[*ring_2].atoms {
+                        ring_pairs.insert(unordered(atom_1, atom_2));
+                    }
+                }
+            }
+            Contact::CationPi { cation, ring, .. } => {
+                for &ring_atom in &structure.bonding.rings[*ring].atoms {
+                    ring_pairs.insert(unordered(ring_atom, *cation));
+                }
+            }
+            _ => {}
         }
     }
-    contacts
+    unexplained
+        .iter()
+        .filter(|&&(atom_1, atom_2, distance)| !ring_pairs.contains(&unordered(atom_1, atom_2)) && touching(structure, atom_1, atom_2, distance))
+        .map(|&(atom_1, atom_2, distance)| Contact::VanDerWaals { atom_1, atom_2, distance })
+        .collect()
 }
 
 fn unordered(atom_1: usize, atom_2: usize) -> (usize, usize) {

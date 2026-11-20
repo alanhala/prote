@@ -16,6 +16,8 @@ pub struct AtomTypes {
     pub cation: Selection,
     pub anion: Selection,
     pub water: Selection,
+    pub halogen_bond_donor: Selection,
+    pub halogen_bond_acceptor: Selection,
 }
 
 impl AtomTypes {
@@ -31,6 +33,9 @@ impl AtomTypes {
             cation: Mask::from_bools((0..structure.atoms.len()).map(|atom| shares_charge(structure, atom_properties, atom, 1)).collect()),
             anion: Mask::from_bools((0..structure.atoms.len()).map(|atom| shares_charge(structure, atom_properties, atom, -1)).collect()),
             water: Selection::by_instance(structure, |_, entity| entity.kind == EntityKind::Water),
+            // Fluorine is left out: it holds its electrons too tightly to form the positive patch a halogen bond needs.
+            halogen_bond_donor: Selection::by_atom(structure, |atom| matches!(atom.element, Element::Cl | Element::Br | Element::I)),
+            halogen_bond_acceptor: Selection::by_atom(structure, |atom| matches!(atom.element, Element::N | Element::O | Element::S)),
         }
     }
 }
