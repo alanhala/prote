@@ -13,6 +13,8 @@ pub struct AtomTypes {
     pub hydrogen_bond_acceptor: Selection,
     pub metal: Selection,
     pub metal_binder: Selection,
+    pub cation: Selection,
+    pub anion: Selection,
 }
 
 impl AtomTypes {
@@ -25,8 +27,26 @@ impl AtomTypes {
             ),
             metal: Selection::by_atom(structure, |atom| atom.element.is_metal()),
             metal_binder: Selection::by_atom(structure, |atom| matches!(atom.element, Element::N | Element::O | Element::S)),
+            cation: Mask::from_bools((0..structure.atoms.len()).map(|atom| shares_charge(structure, atom_properties, atom, 1)).collect()),
+            anion: Mask::from_bools((0..structure.atoms.len()).map(|atom| shares_charge(structure, atom_properties, atom, -1)).collect()),
         }
     }
+}
+
+fn shares_charge(structure: &Structure, atom_properties: &AtomProperties, atom: usize, sign: i8) -> bool {
+    let charged = |atom: usize| atom_properties.formal_charges[atom].is_some_and(|charge| charge.signum() == sign);
+    // Resonance: the two oxygens of a carboxylate are identical, yet the file draws the double bond, and so the
+    // charge, on one of them. A twin on the same centre whose bond could swap with this atom's shares its charge.
+    let twin_charged = structure.covalent_partners(atom).any(|to_centre| {
+        to_centre.atom.is_some_and(|centre| {
+            structure.covalent_partners(centre).any(|to_twin| {
+                to_twin.atom.is_some_and(|twin| twin != atom && charged(twin))
+                    && to_twin.element == structure.atoms[atom].element
+                    && to_twin.order != to_centre.order
+            })
+        })
+    });
+    charged(atom) || twin_charged
 }
 
 fn is_hydrophobic(structure: &Structure, atom: usize) -> bool {

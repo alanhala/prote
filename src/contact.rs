@@ -29,6 +29,8 @@ pub enum Contact {
     FaceToFace { ring_1: usize, ring_2: usize, distance: f64, plane_angle: f64, normal_to_center_angle: f64 },
     EdgeToFace { ring_1: usize, ring_2: usize, distance: f64, plane_angle: f64, normal_to_center_angle: f64, intersect_distance: f64 },
     HydrogenBond { donor: usize, acceptor: usize, distance: f64 },
+    Ionic { cation: usize, anion: usize, distance: f64 },
+    SaltBridge { cation: usize, anion: usize, distance: f64 },
     // later: CationPi { cation, ring, .. }
 }
 
@@ -40,7 +42,7 @@ struct AtomPairCheck {
 const ATOM_PAIR_CHECKS: [AtomPairCheck; 3] = [
     AtomPairCheck { distance: 4.5, evaluate: hydrophobic },
     AtomPairCheck { distance: 2.8, evaluate: metal_coordination },
-    AtomPairCheck { distance: 3.5, evaluate: h_bond },
+    AtomPairCheck { distance: 4.5, evaluate: electrostatic },
 ];
 
 fn hydrophobic(
@@ -68,6 +70,34 @@ fn metal_coordination(
     (binds(atom_1, atom_2) || binds(atom_2, atom_1)).then_some(Contact::MetalCoordination { atom_1, atom_2, distance })
 }
 
+fn electrostatic(
+    structure: &Structure,
+    index: &SpatialIndex,
+    types: &AtomTypes,
+    properties: &AtomProperties,
+    atom_1: usize,
+    atom_2: usize,
+    distance: f64,
+) -> Option<Contact> {
+    let charged = opposite_charges(types, atom_1, atom_2);
+    let bonded = if distance <= 3.5 { h_bond(structure, index, types, properties, atom_1, atom_2, distance) } else { None };
+    match (charged, bonded) {
+        (Some((cation, anion)), Some(_)) => Some(Contact::SaltBridge { cation, anion, distance }),
+        (Some((cation, anion)), None) => Some(Contact::Ionic { cation, anion, distance }),
+        (None, bonded) => bonded,
+    }
+}
+
+fn opposite_charges(types: &AtomTypes, atom_1: usize, atom_2: usize) -> Option<(usize, usize)> {
+    if types.cation.contains(atom_1) && types.anion.contains(atom_2) {
+        Some((atom_1, atom_2))
+    } else if types.anion.contains(atom_1) && types.cation.contains(atom_2) {
+        Some((atom_2, atom_1))
+    } else {
+        None
+    }
+}
+
 fn h_bond(
     structure: &Structure,
     index: &SpatialIndex,
@@ -86,8 +116,8 @@ fn h_bond(
         _ => vec![],
     };
     h_bond_roles.into_iter().find_map(|(acceptor, donor)| {
-        let hydrogens: Vec<usize> =
-            structure.covalent_partners(donor).filter(|partner| partner.element == Element::H).filter_map(|partner| partner.atom).collect();
+        let (hydrogens, heavy): (Vec<usize>, Vec<usize>) =
+            structure.covalent_partners(donor).filter_map(|partner| partner.atom).partition(|&atom| structure.atoms[atom].element == Element::H);
         let points_at_acceptor = |hydrogen: usize| {
             (index.positions[donor] - index.positions[hydrogen]).angle(&(index.positions[acceptor] - index.positions[hydrogen])).to_degrees() >= 130.0
         };
@@ -98,35 +128,33 @@ fn h_bond(
         if structure.bonding.implicit_hydrogens[donor] == 0 {
             return None;
         }
-        let present: Vec<usize> =
-            structure.covalent_partners(donor).filter(|partner| partner.element != Element::H).filter_map(|partner| partner.atom).collect();
-        match (properties.hybridization[donor], present.len()) {
+        match (properties.hybridization[donor], heavy.len()) {
             (Some(Hybridization::Sp2), 2) => {
-                let midpoint = Point3::centroid(&[index.positions[present[0]], index.positions[present[1]]]);
+                let midpoint = Point3::centroid(&[index.positions[heavy[0]], index.positions[heavy[1]]]);
                 let hydrogen_direction = index.positions[donor] - midpoint;
                 ((index.positions[acceptor] - index.positions[donor]).angle(&hydrogen_direction).to_degrees() <= 35.0)
                     .then(|| Contact::HydrogenBond { donor, acceptor, distance })
             }
             (Some(Hybridization::Sp2), 1) => {
-                let neighbor_donor = index.positions[present[0]] - index.positions[donor];
+                let neighbor_donor = index.positions[heavy[0]] - index.positions[donor];
                 let acceptor_donor = index.positions[acceptor] - index.positions[donor];
                 let angle = neighbor_donor.angle(&acceptor_donor).to_degrees();
                 (angle >= 85.0 && angle <= 155.0).then(|| Contact::HydrogenBond { donor, acceptor, distance })
             }
             (Some(Hybridization::Sp3), 1) => {
-                let neighbor_donor = index.positions[present[0]] - index.positions[donor];
+                let neighbor_donor = index.positions[heavy[0]] - index.positions[donor];
                 let acceptor_donor = index.positions[acceptor] - index.positions[donor];
                 let angle = neighbor_donor.angle(&acceptor_donor).to_degrees();
                 (angle >= 75.0 && angle <= 145.0).then(|| Contact::HydrogenBond { donor, acceptor, distance })
             }
             (Some(Hybridization::Sp3), 2) => {
-                let midpoint = Point3::centroid(&[index.positions[present[0]], index.positions[present[1]]]);
+                let midpoint = Point3::centroid(&[index.positions[heavy[0]], index.positions[heavy[1]]]);
                 let away_from_neighbors = index.positions[donor] - midpoint;
                 ((index.positions[acceptor] - index.positions[donor]).angle(&away_from_neighbors).to_degrees() <= 90.0)
                     .then(|| Contact::HydrogenBond { donor, acceptor, distance })
             }
             (Some(Hybridization::Sp3), 3) => {
-                let midpoint = Point3::centroid(&[index.positions[present[0]], index.positions[present[1]], index.positions[present[2]]]);
+                let midpoint = Point3::centroid(&[index.positions[heavy[0]], index.positions[heavy[1]], index.positions[heavy[2]]]);
                 let hydrogen_direction = index.positions[donor] - midpoint;
                 ((index.positions[acceptor] - index.positions[donor]).angle(&hydrogen_direction).to_degrees() <= 35.0)
                     .then(|| Contact::HydrogenBond { donor, acceptor, distance })
