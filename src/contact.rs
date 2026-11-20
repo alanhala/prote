@@ -10,8 +10,6 @@ use nalgebra::constraint;
 use crate::{
     atom_properties::{AtomProperties, Hybridization},
     atom_types::AtomTypes,
-    bond::BondKind,
-    bond_graph,
     element::Element,
     geometry::{Plane3, Point3},
     mask::Mask,
@@ -31,7 +29,7 @@ pub enum Contact {
     HydrogenBond { donor: usize, acceptor: usize, distance: f64 },
     Ionic { cation: usize, anion: usize, distance: f64 },
     SaltBridge { cation: usize, anion: usize, distance: f64 },
-    // later: CationPi { cation, ring, .. }
+    WaterBridge { atom_1: usize, atom_2: usize, water: usize, distance_1_to_water: f64, distance_2_to_water: f64 }, // later: CationPi { cation, ring, .. }
 }
 
 struct AtomPairCheck {
@@ -208,7 +206,6 @@ pub fn find(
         .filter(|&(atom_1, atom_2, _)| !structure.bonding.bonds.within_steps(atom_1, atom_2, 3))
         .collect();
     let mut explained = vec![false; candidates.len()];
-    let mut ring_pairs: HashSet<(usize, usize)> = HashSet::new();
     for (i, &(atom_1, atom_2, distance)) in candidates.iter().enumerate() {
         for check in &ATOM_PAIR_CHECKS {
             if distance <= check.distance {
@@ -220,6 +217,7 @@ pub fn find(
         }
     }
 
+    let mut ring_pairs: HashSet<(usize, usize)> = HashSet::new();
     let aromatic: Mask<Ring> = Mask::from_bools(structure.bonding.rings.iter().map(|ring| ring.aromatic).collect());
     let query_rings: Mask<Ring> =
         aromatic.and(&Mask::from_bools(structure.bonding.rings.iter().map(|ring| ring.atoms.iter().all(|&atom| query.contains(atom))).collect()));
@@ -239,6 +237,36 @@ pub fn find(
                         ring_pairs.insert(unordered(atom_1, atom_2));
                     }
                 }
+            }
+        }
+    }
+
+    let bonded_to_water = |selection: &Selection| -> Vec<(usize, usize, f64)> {
+        index
+            .pairs_closer_than(selection, &types.water, 3.5)
+            .filter(|&(atom, water, distance)| {
+                !types.water.contains(atom) && h_bond(structure, index, types, properties, atom, water, distance).is_some()
+            })
+            .collect()
+    };
+    let mut search_by_water: HashMap<usize, Vec<(usize, f64)>> = HashMap::new();
+    for (atom, water, distance) in bonded_to_water(search) {
+        search_by_water.entry(water).or_default().push((atom, distance));
+    }
+    for (atom_1, water, distance_1) in bonded_to_water(query) {
+        for &(atom_2, distance_2) in search_by_water.get(&water).into_iter().flatten() {
+            if atom_1 == atom_2 {
+                continue;
+            }
+            if atom_2 < atom_1 && query.contains(atom_2) && search.contains(atom_1) {
+                continue;
+            }
+            if structure.bonding.bonds.within_steps(atom_1, atom_2, 3) {
+                continue;
+            }
+            let angle = (index.positions[atom_1] - index.positions[water]).angle(&(index.positions[atom_2] - index.positions[water])).to_degrees();
+            if (71.0..=140.0).contains(&angle) {
+                contacts.push(Contact::WaterBridge { atom_1, atom_2, water, distance_1_to_water: distance_1, distance_2_to_water: distance_2 });
             }
         }
     }

@@ -4,7 +4,7 @@ use crate::{
     element::{self, Element},
     mask::Mask,
     selection::Selection,
-    structure::Structure,
+    structure::{EntityKind, Structure},
 };
 
 pub struct AtomTypes {
@@ -15,6 +15,7 @@ pub struct AtomTypes {
     pub metal_binder: Selection,
     pub cation: Selection,
     pub anion: Selection,
+    pub water: Selection,
 }
 
 impl AtomTypes {
@@ -29,6 +30,7 @@ impl AtomTypes {
             metal_binder: Selection::by_atom(structure, |atom| matches!(atom.element, Element::N | Element::O | Element::S)),
             cation: Mask::from_bools((0..structure.atoms.len()).map(|atom| shares_charge(structure, atom_properties, atom, 1)).collect()),
             anion: Mask::from_bools((0..structure.atoms.len()).map(|atom| shares_charge(structure, atom_properties, atom, -1)).collect()),
+            water: Selection::by_instance(structure, |_, entity| entity.kind == EntityKind::Water),
         }
     }
 }
@@ -81,7 +83,8 @@ fn is_hydrogen_bond_acceptor(structure: &Structure, atom_properties: &AtomProper
     match structure.atoms[atom].element {
         Element::O => atom_properties.lone_pairs[atom].is_some_and(|lone_pairs| lone_pairs > 0),
         Element::N => {
-            let shares_pair = matches!(atom_properties.hybridization[atom], Some(Hybridization::Sp2)) && structure.bonding.atoms_bonded_sum(atom) == 3;
+            let shares_pair =
+                matches!(atom_properties.hybridization[atom], Some(Hybridization::Sp2)) && structure.bonding.atoms_bonded_sum(atom) == 3;
             atom_properties.lone_pairs[atom].is_some_and(|lone_pairs| lone_pairs > 0) && !shares_pair
         }
         _ => false,
