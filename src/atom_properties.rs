@@ -30,7 +30,9 @@ fn formal_charges(structure: &Structure) -> Vec<Option<i8>> {
             .valences()
             .iter()
             .map(|&valence| structure.bonding.bond_order_sum(id) as i8 - valence as i8)
-            .min_by_key(|charge| charge.abs());
+            .min_by_key(|charge| charge.abs())
+            // A metal has no usual number of bonds to count against, so only the file can say its charge.
+            .or(atom.stated_charge);
     }
     charges
 }
