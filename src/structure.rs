@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{bond::BondKind, bond_graph::Bonding, bond_order::BondOrder, element::Element, structure};
+use crate::element::Element;
 
 #[derive(Debug)]
 pub struct Structure {
@@ -8,14 +8,6 @@ pub struct Structure {
     pub residues: Vec<Residue>,
     pub instances: Vec<EntityInstance>,
     pub entities: Vec<Entity>,
-    pub bonding: Bonding,
-}
-
-pub struct Partner {
-    pub element: Element,
-    pub order: BondOrder,
-    pub aromatic: bool,
-    pub atom: Option<usize>, // None when it is missing from the file
 }
 
 impl Structure {
@@ -29,23 +21,6 @@ impl Structure {
 
     pub fn atom_named(&self, residue: &Residue, name: &str) -> Option<usize> {
         residue.atoms.clone().find(|&atom| self.atoms[atom].name == name)
-    }
-
-    pub fn covalent_partners(&self, atom: usize) -> impl Iterator<Item = Partner> + '_ {
-        let covalent_neighbors =
-            self.bonding.bonds.neighbors(atom).iter().filter_map(|&(neighbor, edge)| match self.bonding.bonds.edges()[edge].kind {
-                BondKind::Coordination => None,
-                BondKind::Covalent { order, aromatic, .. } => {
-                    Some(Partner { element: self.atoms[neighbor].element, atom: Some(neighbor), order, aromatic })
-                }
-            });
-        let covalent_missing = self.bonding.missing_partners[atom].iter().map(|missing_partner| Partner {
-            element: missing_partner.element,
-            atom: None,
-            order: missing_partner.order,
-            aromatic: missing_partner.aromatic,
-        });
-        covalent_neighbors.chain(covalent_missing)
     }
 }
 

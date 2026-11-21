@@ -1,13 +1,22 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, vec};
 
 use crate::{
     bond::{Bond, BondKind, BondSource, Link, LinkType, ResidueTemplateBond},
     bond_order::BondOrder,
     element::Element,
+    functional_groups::functional_groups,
     graph::Graph,
+    protonation::protonate,
     ring::Ring,
     structure::{EntityKind, PolymerKind, Structure},
 };
+
+pub struct Partner {
+    pub element: Element,
+    pub order: BondOrder,
+    pub aromatic: bool,
+    pub atom: Option<usize>, // None when it is missing from the file
+}
 
 #[derive(Debug)]
 pub struct MissingResiudeTemplateError {
@@ -78,67 +87,41 @@ impl Bonding {
         let missing = self.missing_partners[atom].len() as u8;
         present + self.implicit_hydrogens[atom] + missing
     }
-}
 
-pub fn with_bonds(
-    structure: Structure,
-    templates: &HashMap<String, Vec<ResidueTemplateBond>>,
-    links: &[Link],
-    ph: f64,
-) -> Result<(Structure, Vec<LinkIssue>), MissingResiudeTemplateError> {
-    let mut bonding = template_bonds(&structure, templates)?;
-    let template_hydrogens = bonding.implicit_hydrogens.clone();
-    let mut issues = backbone_bonds(&structure, &mut bonding);
-    issues.extend(link_bonds(&mut bonding, links));
-    protonate(&structure, &mut bonding, &template_hydrogens, ph);
-    bonding.rings = rings(&bonding);
-    Ok((Structure { bonding, ..structure }, issues))
-}
-
-fn protonate(structure: &Structure, bonding: &mut Bonding, template_hydrogens: &[u8], ph: f64) {
-    for instance in structure.instances.iter() {
-        if !matches!(structure.entities[instance.entity].kind, EntityKind::Polymer(PolymerKind::PolypeptideD | PolymerKind::PolypeptideL)) {
-            continue;
-        }
-        for residue_id in instance.residues.clone() {
-            let residue = &structure.residues[residue_id];
-            let (h, group): (i8, &[&str]) = match residue.name.as_str() {
-                "ASP" => (if ph >= 3.67 { -1 } else { 0 }, &["OD1", "OD2"]),
-                "GLU" => (if ph >= 4.25 { -1 } else { 0 }, &["OE1", "OE2"]),
-                "HIS" => (if ph >= 6.54 { -1 } else { 0 }, &["ND1", "NE2"]),
-                "CYS" => (if ph >= 8.55 { -1 } else { 0 }, &["SG"]),
-                "TYR" => (if ph >= 9.84 { -1 } else { 0 }, &["OH"]),
-                "LYS" => (if ph >= 10.40 { -1 } else { 0 }, &["NZ"]),
-                "ARG" => (if ph >= 12.0 { -1 } else { 0 }, &["NH2", "NH1", "NE"]),
-                _ => (0, &[]),
-            };
-            if h < 0 {
-                for name in group {
-                    if let Some(atom_id) = structure.atom_named(residue, name) {
-                        if bonding.implicit_hydrogens[atom_id] > 0 {
-                            bonding.implicit_hydrogens[atom_id] -= 1;
-                            break;
-                        }
-                    }
-                }
-            }
-            if residue.seq_id == Some(1) && ph < 8.0 {
-                if let Some(atom) = structure.atom_named(residue, "N") {
-                    // Fewer hydrogens than the template means a link capped the N, which then stays neutral.
-                    if bonding.implicit_hydrogens[atom] == template_hydrogens[atom] {
-                        bonding.implicit_hydrogens[atom] += 1;
-                    }
-                }
-            }
-            if ph >= 3.67 {
-                if let Some(atom) = structure.atom_named(residue, "OXT") {
-                    if bonding.implicit_hydrogens[atom] > 0 {
-                        bonding.implicit_hydrogens[atom] -= 1;
-                    }
-                }
-            }
-        }
+    pub fn new(
+        structure: &Structure,
+        templates: &HashMap<String, Vec<ResidueTemplateBond>>,
+        links: &[Link],
+        ph: f64,
+    ) -> Result<(Self, Vec<LinkIssue>), MissingResiudeTemplateError> {
+        let mut bonding = template_bonds(structure, templates)?;
+        let mut issues = backbone_bonds(&structure, &mut bonding);
+        issues.extend(link_bonds(&mut bonding, links));
+        bonding.rings = rings(&bonding);
+        let groups = functional_groups(&structure, &bonding);
+        protonate(&structure, &mut bonding, &groups, ph);
+        Ok((bonding, issues))
     }
+}
+
+pub fn covalent_heavy_partners<'a>(structure: &'a Structure, bonding: &'a Bonding, atom: usize) -> impl Iterator<Item = Partner> + 'a {
+    covalent_partners(structure, bonding, atom).filter(|partner| partner.element != Element::H)
+}
+
+pub fn covalent_partners<'a>(structure: &'a Structure, bonding: &'a Bonding, atom: usize) -> impl Iterator<Item = Partner> + 'a {
+    let covalent_neighbors = bonding.bonds.neighbors(atom).iter().filter_map(|&(neighbor, edge)| match bonding.bonds.edges()[edge].kind {
+        BondKind::Coordination => None,
+        BondKind::Covalent { order, aromatic, .. } => {
+            Some(Partner { element: structure.atoms[neighbor].element, atom: Some(neighbor), order, aromatic })
+        }
+    });
+    let covalent_missing = bonding.missing_partners[atom].iter().map(|missing_partner| Partner {
+        element: missing_partner.element,
+        atom: None,
+        order: missing_partner.order,
+        aromatic: missing_partner.aromatic,
+    });
+    covalent_neighbors.chain(covalent_missing)
 }
 
 fn payment(bonding: &Bonding, atom: usize, order: BondOrder) -> Option<Payment> {
@@ -220,24 +203,37 @@ fn template_bonds(structure: &Structure, templates: &HashMap<String, Vec<Residue
 fn backbone_bonds(structure: &Structure, bonding: &mut Bonding) -> Vec<LinkIssue> {
     let mut issues = vec![];
     for instance in &structure.instances {
-        let Some((name_1, name_2)) = backbone_link(structure.entities[instance.entity].kind) else {
+        let Some(((name_1, element_1), name_2)) = backbone_link(structure.entities[instance.entity].kind) else {
             continue;
         };
-        for pair in structure.residues[instance.residues.clone()].windows(2) {
-            let (previous, next) = (&pair[0], &pair[1]);
-            let (Some(previous_seq), Some(next_seq)) = (previous.seq_id, next.seq_id) else {
+        let residues = &structure.residues[instance.residues.clone()];
+        for (position, next) in residues.iter().enumerate() {
+            let (Some(next_seq), Some(atom_2)) = (next.seq_id, structure.atom_named(next, name_2)) else {
                 continue;
             };
             // label_seq_id counts unmodelled residues, so a gap means a chain break.
-            if previous_seq + 1 != next_seq {
-                continue;
-            }
-            let (Some(atom_1), Some(atom_2)) = (structure.atom_named(previous, name_1), structure.atom_named(next, name_2)) else {
-                continue;
-            };
-            let bond = Bond { atom_1, atom_2, kind: BondKind::Covalent { order: BondOrder::Single, aromatic: false, source: BondSource::Backbone } };
-            if let Err(kind) = add_bond(bonding, bond) {
-                issues.push(LinkIssue { atom_1, atom_2, kind });
+            let previous = position.checked_sub(1).map(|position| &residues[position]).filter(|previous| previous.seq_id == Some(next_seq - 1));
+            match previous.and_then(|previous| structure.atom_named(previous, name_1)) {
+                Some(atom_1) => {
+                    let bond =
+                        Bond { atom_1, atom_2, kind: BondKind::Covalent { order: BondOrder::Single, aromatic: false, source: BondSource::Backbone } };
+                    if let Err(kind) = add_bond(bonding, bond) {
+                        issues.push(LinkIssue { atom_1, atom_2, kind });
+                    }
+                }
+                // The neighbour is in the molecule but not in the file, so it still takes the place of a hydrogen.
+                None if next_seq > 1 => {
+                    if let Some(Payment::Hydrogens) = payment(bonding, atom_2, BondOrder::Single) {
+                        pay(bonding, atom_2, BondOrder::Single, Payment::Hydrogens);
+                        bonding.missing_partners[atom_2].push(MissingPartner {
+                            name: name_1.to_string(),
+                            element: element_1,
+                            order: BondOrder::Single,
+                            aromatic: false,
+                        });
+                    }
+                }
+                None => {}
             }
         }
     }
@@ -324,10 +320,10 @@ pub fn rings(bonding: &Bonding) -> Vec<Ring> {
         .collect()
 }
 
-fn backbone_link(entity_kind: EntityKind) -> Option<(&'static str, &'static str)> {
+fn backbone_link(entity_kind: EntityKind) -> Option<((&'static str, Element), &'static str)> {
     match entity_kind {
-        EntityKind::Polymer(PolymerKind::PolypeptideL | PolymerKind::PolypeptideD) => Some(("C", "N")),
-        EntityKind::Polymer(PolymerKind::Dna | PolymerKind::Rna | PolymerKind::DnaRnaHybrid) => Some(("O3'", "P")),
+        EntityKind::Polymer(PolymerKind::PolypeptideL | PolymerKind::PolypeptideD) => Some((("C", Element::C), "N")),
+        EntityKind::Polymer(PolymerKind::Dna | PolymerKind::Rna | PolymerKind::DnaRnaHybrid) => Some((("O3'", Element::O), "P")),
         EntityKind::Polymer(PolymerKind::CyclicPseudoPeptide | PolymerKind::PeptideNucleicAcid | PolymerKind::Other) => None,
         EntityKind::NonPolymer | EntityKind::Branched | EntityKind::Water => None,
     }
@@ -342,7 +338,7 @@ mod tests {
         Bond { atom_1, atom_2, kind: BondKind::Covalent { order: BondOrder::Single, aromatic, source } }
     }
 
-    fn structure_with(atom_count: usize, bonds: Vec<Bond>) -> Structure {
+    fn structure_with(atom_count: usize, bonds: Vec<Bond>) -> (Structure, Bonding) {
         let atoms = (0..atom_count).map(|_| Atom { element: Element::C, name: "C".to_string(), stated_charge: None }).collect();
         let bonding = Bonding {
             bonds: Graph::new(atom_count, bonds),
@@ -350,7 +346,7 @@ mod tests {
             missing_partners: (0..atom_count).map(|_| vec![]).collect(),
             rings: vec![],
         };
-        Structure { atoms, residues: vec![], instances: vec![], entities: vec![], bonding }
+        (Structure { atoms, residues: vec![], instances: vec![], entities: vec![] }, bonding)
     }
 
     #[test]
@@ -364,7 +360,8 @@ mod tests {
         for i in 0..5 {
             bonds.push(bond(6 + i, 6 + (i + 1) % 5, i < 4, BondSource::Template));
         }
-        let rings = rings(&structure_with(11, bonds).bonding);
+        let (_, bonding) = structure_with(11, bonds);
+        let rings = rings(&bonding);
 
         let mut found: Vec<(usize, bool)> = rings.iter().map(|ring| (ring.atoms.len(), ring.aromatic)).collect();
         found.sort();
@@ -380,6 +377,8 @@ mod tests {
             bond(2, 3, false, BondSource::Template),
             bond(3, 0, false, BondSource::Disulfide),
         ];
-        assert!(rings(&structure_with(4, bonds).bonding).is_empty());
+        let (_, bonding) = structure_with(4, bonds);
+        let rings = rings(&bonding);
+        assert!(rings.is_empty());
     }
 }

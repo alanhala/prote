@@ -15,11 +15,6 @@ impl PartialEq for Frame {
 }
 impl Frame {
     pub fn new(id: usize, positions: Vec<Point3>, occupancies: Vec<f32>, b_factors: Vec<f32>) -> Self {
-        Self {
-            id,
-            positions,
-            occupancies,
-            b_factors,
-        }
+        Self { id, positions, occupancies, b_factors }
     }
 }

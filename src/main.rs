@@ -4,7 +4,7 @@ use prote::{
     atom_properties::{self, AtomProperties},
     atom_types::AtomTypes,
     bond::BondKind,
-    bond_graph,
+    bonding,
     cif::Cif,
     contact::{self, Contact},
     dot,
@@ -15,7 +15,7 @@ use prote::{
 
 fn main() {
     let mmcif = MmCIF::new(Cif::new(&fs::read_to_string("./cifs/3PTB.cif").unwrap())).unwrap();
-    let (structure, frames) = mmcif.build_structure().unwrap();
+    let (structure, bonding, frames) = mmcif.build_structure().unwrap();
     let mut nodes = vec![];
     let mut edges = vec![];
     let mut seen = HashSet::new();
@@ -23,11 +23,11 @@ fn main() {
     let res = Selection::by_residue(&structure, |residue| residue.name == "BEN");
     let protein = Selection::by_instance(&structure, |instance, entity| entity.name == "BETA-TRYPSIN");
     let index = SpatialIndex::new(&frames[0].positions);
-    let properties = AtomProperties::new(&structure);
-    let types = AtomTypes::new(&structure, &properties);
+    let properties = AtomProperties::new(&structure, &bonding);
+    let types = AtomTypes::new(&structure, &bonding, &properties);
     let mut in_contact = vec![];
-    for contact in contact::find(&structure, &types, &properties, &index, &protein, &res) {
-        let ring_atom = |ring: usize| structure.bonding.rings[ring].atoms[0];
+    for contact in contact::find(&structure, &bonding, &types, &properties, &index, &protein, &res) {
+        let ring_atom = |ring: usize| bonding.rings[ring].atoms[0];
         let (kind, color, atom_1, atom_2, distance) = match contact {
             Contact::MetalCoordination { atom_1, atom_2, distance } => ("coordination", "#eb6834", atom_1, atom_2, distance),
             Contact::HydrogenBond { donor, acceptor, distance } => ("hydrogen bond", "#c2255c", donor, acceptor, distance),
@@ -69,7 +69,7 @@ fn main() {
         edges.push(dot::Edge { label: Some(format!("{kind}\n{distance:.1} A")), color: Some(color.to_string()), ..dot::edge(atom_1, atom_2) });
     }
     let drawn = res.or(&Selection::from_indices(structure.atoms.len(), in_contact));
-    for bond in structure.bonding.bonds.edges().iter() {
+    for bond in bonding.bonds.edges().iter() {
         if drawn.contains(bond.atom_1) && drawn.contains(bond.atom_2) {
             for atom in [bond.atom_1, bond.atom_2] {
                 if seen.insert(atom) {
